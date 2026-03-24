@@ -36,7 +36,11 @@ quant-trading-system/
 │   │   ├── sec_filings.py       # edgartools: 10-K, 10-Q, Form 4 insider trades
 │   │   ├── news_sentiment.py    # Alpaca news API + basic NLP sentiment
 │   │   ├── crypto_onchain.py    # Free on-chain metrics for crypto
-│   │   └── data_store.py        # SQLite database for all stored data
+│   │   ├── db.py                # asyncpg pool + migration runner for Neon PostgreSQL
+│   │   ├── symbols.py           # Symbol normalization (internal ↔ Alpaca format)
+│   │   ├── resilience.py        # Retry + circuit breaker decorator
+│   │   ├── validators.py        # Data validation bounds checking
+│   │   └── migrations/          # Numbered .sql migration files
 │   ├── analysis/                # Financial analysis engine (your valuesnapshot-like layer)
 │   │   ├── dcf_model.py         # Discounted cash flow with Monte Carlo simulation
 │   │   ├── ratio_analysis.py    # P/E, P/S, PEG, debt-to-equity, FCF margin
@@ -214,7 +218,7 @@ For crypto, the fundamental layer uses:
 
 ### 4. Agent Communication Pattern
 
-Agents communicate through a shared SQLite database with these tables:
+Agents communicate through a shared PostgreSQL database (Neon free tier) with these tables:
 
 - `analysis_scores` — analyst agent writes, strategy agent reads
 - `trade_signals` — strategy agent writes, risk agent reads
@@ -249,9 +253,9 @@ The evolution engine follows Karpathy's autoresearch pattern exactly:
 
 The `evolution.md` file (equivalent to autoresearch's program.md) tells the LLM:
 - What metrics to optimize (Sharpe ratio primary, max drawdown constraint)
-- What constraints to respect (max 10% per position, always keep fundamental filter)
+- What constraints to respect (max 10% per position, dual-track: fundamental-gated + momentum-only)
 - What experiments to try (combine indicators from winners, try new timeframes)
-- What NOT to do (never remove fundamental filters, never exceed risk limits)
+- What NOT to do (never exceed risk limits per track)
 
 ### 6. Quant Engine Integration
 
@@ -288,18 +292,20 @@ ALPACA_BASE_URL=https://paper-api.alpaca.markets  # paper trading first!
 ANTHROPIC_API_KEY=xxx          # for Claude Haiku (evolution agent)
 GROQ_API_KEY=xxx               # free tier (analyst agent summaries)
 SEC_EDGAR_USER_AGENT=YourName your@email.com  # required by SEC
-DATABASE_PATH=./data/trading.db
+DATABASE_URL=postgresql://user:pass@ep-xxx-pooler.neon.tech/neondb?sslmode=require
 LOG_LEVEL=INFO
 EVOLUTION_SCHEDULE=0 0 * * *   # midnight ET daily
-MAX_POSITION_PCT=0.08          # 8% max per position
+MAX_POSITION_PCT=0.08          # 8% max per position (fundamental-gated track)
 MAX_PORTFOLIO_RISK=0.25        # 25% max total risk
+TELEGRAM_BOT_TOKEN=xxx         # optional — pipeline failure alerts
+TELEGRAM_CHAT_ID=xxx           # optional
 ```
 
 ## Build Order
 
 Build modules in this order. Each module should be testable independently before moving on.
 
-1. **Data layer** (src/data/) — market_data.py, fundamentals.py, sec_filings.py, data_store.py
+1. **Data layer** (src/data/) — db.py, symbols.py, resilience.py, validators.py, market_data.py, fundamentals.py, sec_filings.py
 2. **Analysis engine** (src/analysis/) — ratio_analysis.py, dcf_model.py, sensitivity.py
 3. **Indicator library** (src/indicators/) — start with trend.py, momentum.py, volatility.py
 4. **Broker layer** (src/brokers/) — base.py, paper_broker.py, alpaca_broker.py
@@ -331,9 +337,11 @@ edgartools>=2.0.0           # SEC EDGAR filings (free, no API key)
 pandas>=2.0.0
 numpy>=1.24.0
 scipy>=1.10.0              # Stats, copulas, distributions
-aiosqlite>=0.19.0          # Async SQLite
+asyncpg>=0.29.0            # Async PostgreSQL (Neon)
 httpx>=0.27.0              # Async HTTP client
 python-dotenv>=1.0.0
+structlog>=24.1.0          # Structured JSON logging
+exchange_calendars>=4.5.0  # NYSE market calendar
 
 # LLM
 anthropic>=0.40.0          # Claude API (Haiku for evolution)
