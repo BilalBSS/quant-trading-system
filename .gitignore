@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+data/
+*.db
+.venv/
+venv/
+node_modules/
+.claude/
+reports/*.md
+!reports/.gitkeep
