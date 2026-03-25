@@ -6,7 +6,7 @@ Self-improving agentic trading system for US stocks (via Alpaca, commission-free
 
 **Core principle**: Every strategy gets a fundamental base layer (always present) + a technical signal layer (varies per strategy). Fundamentals are the cornerstone. Technicals are the timing mechanism.
 
-**Budget constraint**: Total infrastructure cost must stay under $25/month. Use free tiers aggressively (Groq free for lightweight LLM, edgartools for SEC data, yfinance for fundamentals, Alpaca free tier for market data).
+**Budget constraint**: Total infrastructure cost must stay under $25/month. Use free tiers aggressively (Groq free for lightweight LLM, edgartools for SEC data, yfinance for fundamentals, Alpaca free tier for market data, Finnhub for events/sentiment, CoinGecko for crypto market data, DefiLlama for DeFi flows, Dune Analytics for on-chain).
 
 ## Architecture
 
@@ -34,12 +34,14 @@ quant-trading-system/
 │   │   ├── market_data.py       # Alpaca price/volume data
 │   │   ├── fundamentals.py      # yfinance: P/E, P/S, revenue, margins, etc.
 │   │   ├── sec_filings.py       # edgartools: 10-K, 10-Q, Form 4 insider trades
-│   │   ├── news_sentiment.py    # Alpaca news API + basic NLP sentiment
-│   │   ├── crypto_onchain.py    # Free on-chain metrics for crypto
+│   │   ├── news_sentiment.py    # Finnhub events + sentiment layer
+│   │   ├── crypto_data.py       # CoinGecko price/market data + DefiLlama flows
+│   │   ├── crypto_onchain.py    # Dune Analytics custom on-chain queries
 │   │   ├── db.py                # asyncpg pool + migration runner for Neon PostgreSQL
 │   │   ├── symbols.py           # Symbol normalization (internal ↔ Alpaca format)
 │   │   ├── resilience.py        # Retry + circuit breaker decorator
 │   │   ├── validators.py        # Data validation bounds checking
+│   │   ├── regime_detector.py   # Market regime classification (bull/bear/sideways/high_vol)
 │   │   └── migrations/          # Numbered .sql migration files
 │   ├── analysis/                # Financial analysis engine (your valuesnapshot-like layer)
 │   │   ├── dcf_model.py         # Discounted cash flow with Monte Carlo simulation
@@ -208,13 +210,15 @@ Every strategy, regardless of its technical signals, receives these fundamental 
 - Analyst consensus target vs current price
 - Sensitivity matrix values at different growth/terminal assumptions
 
-For crypto, the fundamental layer uses:
-- NVT ratio (network value to transactions)
-- Active addresses trend
-- Exchange inflow/outflow ratio
-- Funding rates (perp markets)
-- Hash rate trend (for BTC)
-- Stablecoin supply ratio
+For crypto, the fundamental layer uses (via CoinGecko, Dune Analytics, DefiLlama):
+- NVT ratio (network value to transactions) — Dune
+- Active addresses trend — Dune
+- Exchange inflow/outflow ratio — Dune
+- Funding rates (perp markets) — CoinGecko
+- Hash rate trend (for BTC) — CoinGecko
+- Stablecoin supply ratio — DefiLlama
+- TVL trends by protocol — DefiLlama
+- DEX volume — DefiLlama
 
 ### 4. Agent Communication Pattern
 
@@ -292,6 +296,8 @@ ALPACA_BASE_URL=https://paper-api.alpaca.markets  # paper trading first!
 ANTHROPIC_API_KEY=xxx          # for Claude Haiku (evolution agent)
 GROQ_API_KEY=xxx               # free tier (analyst agent summaries)
 SEC_EDGAR_USER_AGENT=YourName your@email.com  # required by SEC
+FINNHUB_API_KEY=xxx            # free tier (events + sentiment)
+DUNE_API_KEY=xxx               # free tier (on-chain analytics)
 DATABASE_URL=postgresql://user:pass@ep-xxx-pooler.neon.tech/neondb?sslmode=require
 LOG_LEVEL=INFO
 EVOLUTION_SCHEDULE=0 0 * * *   # midnight ET daily
@@ -305,7 +311,7 @@ TELEGRAM_CHAT_ID=xxx           # optional
 
 Build modules in this order. Each module should be testable independently before moving on.
 
-1. **Data layer** (src/data/) — db.py, symbols.py, resilience.py, validators.py, market_data.py, fundamentals.py, sec_filings.py
+1. **Data layer** (src/data/) — db.py, symbols.py, resilience.py, validators.py, market_data.py, fundamentals.py, sec_filings.py, regime_detector.py
 2. **Analysis engine** (src/analysis/) — ratio_analysis.py, dcf_model.py, sensitivity.py
 3. **Indicator library** (src/indicators/) — start with trend.py, momentum.py, volatility.py
 4. **Broker layer** (src/brokers/) — base.py, paper_broker.py, alpaca_broker.py
@@ -334,6 +340,8 @@ Every module needs tests. Use pytest. Key test patterns:
 alpaca-py>=0.30.0          # Alpaca broker API
 yfinance>=0.2.0            # Yahoo Finance data
 edgartools>=2.0.0           # SEC EDGAR filings (free, no API key)
+finnhub-python>=2.4.0      # Finnhub events + sentiment (free tier)
+dune-client>=1.0.0         # Dune Analytics on-chain queries (free tier)
 pandas>=2.0.0
 numpy>=1.24.0
 scipy>=1.10.0              # Stats, copulas, distributions
