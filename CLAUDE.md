@@ -8,49 +8,63 @@ Self-improving agentic trading system for US stocks (via Alpaca, commission-free
 
 **Budget constraint**: Total infrastructure cost must stay under $25/month. Use free tiers aggressively (Groq free for lightweight LLM, edgartools for SEC data, yfinance for fundamentals, Alpaca free tier for market data, Finnhub for events/sentiment, CoinGecko for crypto market data, DefiLlama for DeFi flows, Dune Analytics for on-chain).
 
+## Progress
+
+- **Phase 1** (foundation): COMPLETE — db, symbols, resilience, validators, migrations
+- **Phase 2** (data layer + regime detection): COMPLETE — market_data, fundamentals, sec_filings, regime_detector, backfill script
+- **Phase 3** (analysis engine): NOT STARTED
+- **173 tests passing** (98 Phase 1 + 75 Phase 2)
+
 ## Architecture
 
 ```
 quant-trading-system/
-├── CLAUDE.md                    # This file — project blueprint
-├── main.py                      # Entry point — starts the agent orchestrator
-├── evolve.py                    # Autoresearch loop — runs nightly via cron
-├── requirements.txt             # Python dependencies
-├── .env.example                 # Environment variables template
+├── CLAUDE.md                    # this file — project blueprint
+├── CHANGELOG.md                 # version history
+├── TODOS.md                     # deferred work items
+├── main.py                      # entry point — starts the agent orchestrator
+├── evolve.py                    # autoresearch loop — runs nightly via cron
+├── requirements.txt             # python dependencies
+├── .env.example                 # environment variables template
 ├── configs/
-│   ├── strategies/              # Strategy config files (JSON) — the "train.py" equivalent
-│   │   ├── strategy_001.json    # Each file defines entry/exit rules, indicators, params
+│   ├── strategies/              # strategy config files (JSON)
+│   │   ├── strategy_001.json    # each file defines entry/exit rules, indicators, params
 │   │   └── ...
-│   ├── evolution.md             # The "program.md" — instructions for the evolution agent
-│   └── risk_limits.json         # Portfolio-wide risk constraints
+│   ├── evolution.md             # instructions for the evolution agent
+│   └── risk_limits.json         # portfolio-wide risk constraints
+├── scripts/
+│   ├── __init__.py
+│   └── backfill.py              # [BUILT] backfill: market_data -> regimes -> fundamentals -> insider trades
 ├── src/
-│   ├── brokers/                 # MODULAR broker layer — swappable
-│   │   ├── base.py              # Abstract BrokerInterface
+│   ├── brokers/                 # modular broker layer — swappable (not yet built)
+│   │   ├── base.py              # abstract BrokerInterface
 │   │   ├── alpaca_broker.py     # Alpaca implementation (stocks + crypto)
 │   │   ├── coinbase_broker.py   # Coinbase implementation (future, crypto)
-│   │   ├── paper_broker.py      # Simulated broker for backtesting
-│   │   └── broker_factory.py    # Routes symbols to correct broker
-│   ├── data/                    # Data ingestion layer — all free sources
-│   │   ├── market_data.py       # Alpaca price/volume data
-│   │   ├── fundamentals.py      # yfinance: P/E, P/S, revenue, margins, etc.
-│   │   ├── sec_filings.py       # edgartools: 10-K, 10-Q, Form 4 insider trades
+│   │   ├── paper_broker.py      # simulated broker for backtesting
+│   │   └── broker_factory.py    # routes symbols to correct broker
+│   ├── data/                    # data ingestion layer — all free sources
+│   │   ├── __init__.py
+│   │   ├── db.py                # [BUILT] asyncpg pool + migration runner for Neon PostgreSQL
+│   │   ├── symbols.py           # [BUILT] symbol normalization (internal <-> Alpaca format)
+│   │   ├── resilience.py        # [BUILT] retry + circuit breaker decorator
+│   │   ├── validators.py        # [BUILT] data validation bounds checking
+│   │   ├── market_data.py       # [BUILT] alpaca ohlcv + yfinance fallback + backfill
+│   │   ├── fundamentals.py      # [BUILT] yfinance: P/E, P/S, revenue, margins, sector averages
+│   │   ├── sec_filings.py       # [BUILT] edgartools: Form 4 insider trades
+│   │   ├── regime_detector.py   # [BUILT] market regime classification (bull/bear/sideways/high_vol)
 │   │   ├── news_sentiment.py    # Finnhub events + sentiment layer
 │   │   ├── crypto_data.py       # CoinGecko price/market data + DefiLlama flows
 │   │   ├── crypto_onchain.py    # Dune Analytics custom on-chain queries
-│   │   ├── db.py                # asyncpg pool + migration runner for Neon PostgreSQL
-│   │   ├── symbols.py           # Symbol normalization (internal ↔ Alpaca format)
-│   │   ├── resilience.py        # Retry + circuit breaker decorator
-│   │   ├── validators.py        # Data validation bounds checking
-│   │   ├── regime_detector.py   # Market regime classification (bull/bear/sideways/high_vol)
-│   │   └── migrations/          # Numbered .sql migration files
-│   ├── analysis/                # Financial analysis engine (your valuesnapshot-like layer)
-│   │   ├── dcf_model.py         # Discounted cash flow with Monte Carlo simulation
+│   │   └── migrations/
+│   │       └── 001_initial.sql  # [BUILT] schema for market_data, fundamentals, trades, signals
+│   ├── analysis/                # financial analysis engine (not yet built)
+│   │   ├── dcf_model.py         # discounted cash flow with Monte Carlo simulation
 │   │   ├── ratio_analysis.py    # P/E, P/S, PEG, debt-to-equity, FCF margin
-│   │   ├── sensitivity.py       # Sensitivity matrix (growth rate x terminal multiple)
-│   │   ├── earnings_signals.py  # Earnings surprise, guidance, estimate revisions
+│   │   ├── sensitivity.py       # sensitivity matrix (growth rate x terminal multiple)
+│   │   ├── earnings_signals.py  # earnings surprise, guidance, estimate revisions
 │   │   ├── insider_activity.py  # SEC Form 4 — insider buys/sells
 │   │   └── ai_summary.py       # Groq free tier — natural language analysis summary
-│   ├── indicators/              # Technical indicator library — ALL computed locally
+│   ├── indicators/              # technical indicator library (not yet built)
 │   │   ├── trend.py             # SMA, EMA, MACD, ADX, Supertrend
 │   │   ├── momentum.py          # RSI, Stochastic, CCI, Williams %R, ROC
 │   │   ├── volatility.py        # Bollinger Bands, ATR, Keltner Channel
@@ -58,46 +72,48 @@ quant-trading-system/
 │   │   ├── structure.py         # Fair Value Gaps, Order Blocks, Structure Breaks
 │   │   ├── support_resistance.py # Pivot points, Fibonacci levels, S/R zones
 │   │   └── crypto_specific.py   # Funding rate, open interest, exchange flows, NVT
-│   ├── quant/                   # Quantitative engines (from the Twitter post)
+│   ├── quant/                   # quantitative engines (not yet built)
 │   │   ├── monte_carlo.py       # Monte Carlo simulation + variance reduction
-│   │   ├── importance_sampling.py # Rare event estimation for tail risk
+│   │   ├── importance_sampling.py # rare event estimation for tail risk
 │   │   ├── particle_filter.py   # Sequential Monte Carlo for real-time updating
 │   │   ├── copula_models.py     # Gaussian, t-copula, Clayton for correlation
 │   │   ├── risk_metrics.py      # VaR, Expected Shortfall, max drawdown
-│   │   └── brier_score.py       # Calibration tracking for predictions
-│   ├── strategies/              # Strategy framework
-│   │   ├── base_strategy.py     # Abstract StrategyInterface
-│   │   ├── strategy_loader.py   # Loads strategy configs from JSON files
-│   │   ├── strategy_pool.py     # Manages multiple concurrent strategies
-│   │   └── backtest.py          # Backtesting engine — scores strategies
-│   ├── agents/                  # Runtime agentic team (Layer 2)
-│   │   ├── orchestrator.py      # Main loop — coordinates all agents
-│   │   ├── analyst_agent.py     # Runs financial analysis, scores stocks
-│   │   ├── strategy_agent.py    # Generates trade signals from indicators + analysis
-│   │   ├── risk_agent.py        # Approves/rejects trades, checks portfolio risk
-│   │   ├── executor_agent.py    # Places orders through broker layer
+│   │   └── brier_score.py       # calibration tracking for predictions
+│   ├── strategies/              # strategy framework (not yet built)
+│   │   ├── base_strategy.py     # abstract StrategyInterface
+│   │   ├── strategy_loader.py   # loads strategy configs from JSON files
+│   │   ├── strategy_pool.py     # manages multiple concurrent strategies
+│   │   └── backtest.py          # backtesting engine — scores strategies
+│   ├── agents/                  # runtime agentic team (not yet built)
+│   │   ├── orchestrator.py      # main loop — coordinates all agents
+│   │   ├── analyst_agent.py     # runs financial analysis, scores stocks
+│   │   ├── strategy_agent.py    # generates trade signals from indicators + analysis
+│   │   ├── risk_agent.py        # approves/rejects trades, checks portfolio risk
+│   │   ├── executor_agent.py    # places orders through broker layer
 │   │   └── tools.py             # MCP-style tools each agent can call
-│   ├── evolution/               # Autoresearch loop (Layer 3)
-│   │   ├── evolution_engine.py  # Reads logs → proposes mutations → backtests → keeps/discards
+│   ├── evolution/               # autoresearch loop (not yet built)
+│   │   ├── evolution_engine.py  # reads logs -> proposes mutations -> backtests -> keeps/discards
 │   │   ├── strategy_mutator.py  # LLM-powered strategy config mutation
-│   │   ├── report_generator.py  # Weekly evolution reports (markdown)
-│   │   └── documentation.py     # Auto-updates docs after each evolution cycle
-│   └── dashboard/               # Web dashboard (built later)
+│   │   ├── report_generator.py  # weekly evolution reports (markdown)
+│   │   └── documentation.py     # auto-updates docs after each evolution cycle
+│   └── dashboard/               # web dashboard (not yet built)
 │       ├── app.py               # FastAPI backend serving analysis + trading data
-│       └── templates/           # HTML templates or React frontend (phase 2)
-├── tests/                       # Test suite
-│   ├── test_brokers.py
-│   ├── test_strategies.py
-│   ├── test_analysis.py
-│   ├── test_indicators.py
-│   ├── test_quant.py
-│   └── test_backtester.py
-├── reports/                     # Auto-generated evolution reports
+│       └── templates/           # HTML templates or React frontend
+├── tests/                       # test suite — 173 tests passing
+│   ├── __init__.py
+│   ├── test_db.py               # [BUILT] 12 tests — pool init, migrations, masking
+│   ├── test_symbols.py          # [BUILT] 24 tests — symbol conversion, universes
+│   ├── test_resilience.py       # [BUILT] 9 tests — retry, circuit breaker
+│   ├── test_validators.py       # [BUILT] 28 tests — bounds, ohlcv, fundamentals, sentiment
+│   ├── test_market_data.py      # [BUILT] 21 tests — alpaca, yfinance, backfill, store
+│   ├── test_fundamentals.py     # [BUILT] 19 tests — fetch, store, sector averages
+│   ├── test_sec_filings.py      # [BUILT] 17 tests — insider trades, data quality
+│   ├── test_regime_detector.py  # [BUILT] 18 tests — classify, indicators, backfill
+│   └── conftest.py              # [BUILT] shared fixtures
+├── reports/                     # auto-generated evolution reports
 │   └── .gitkeep
 └── docs/
-    ├── setup.md                 # VPS setup instructions
-    ├── architecture.md          # Detailed architecture docs
-    └── strategy_guide.md        # How strategies work and evolve
+    └── (empty — to be populated)
 ```
 
 ## gstack
@@ -323,9 +339,14 @@ Build modules in this order. Each module should be testable independently before
 10. **Advanced quant** (src/quant/) — copula_models.py, particle_filter.py, importance_sampling.py
 11. **Dashboard** (src/dashboard/) — FastAPI app with analysis + trading views
 
-## Testing Requirements
+## Testing
 
-Every module needs tests. Use pytest. Key test patterns:
+Run: `python -m pytest tests/ -v`
+
+173 tests passing across 9 test files. Every module has tests. Key patterns:
+- **asyncpg pool mocking**: use `_mock_pool()` helper — `MagicMock` for pool, `AsyncMock` for context manager and connection
+- **external API mocking**: patch httpx.AsyncClient for alpaca, patch yfinance.Ticker for yfinance, patch edgartools for SEC
+- **data validation**: test both valid and invalid inputs, verify graceful handling of edge cases
 - Broker tests: use PaperBroker to verify order flow without real API calls
 - Strategy tests: use known historical data with known outcomes
 - Analysis tests: verify DCF math against manually calculated values
