@@ -167,10 +167,11 @@ class TestInitialization:
         assert s.name == "Bollinger_PE_Oversold"
         assert s.config is cfg
 
-    def test_universe_is_set(self):
+    def test_universe_ref(self):
         s = ConfigDrivenStrategy(_strategy_001_config())
-        assert isinstance(s.universe, set)
-        assert "AAPL" in s.universe
+        assert isinstance(s.universe_ref, str)
+        # / legacy list configs get stored as the raw value
+        assert s.universe_ref is not None
 
     def test_requires_fundamentals_when_filters_present(self):
         s = ConfigDrivenStrategy(_strategy_001_config())
@@ -184,7 +185,7 @@ class TestInitialization:
         cfg = _base_config()
         del cfg["universe"]
         s = ConfigDrivenStrategy(cfg)
-        assert s.universe == set()
+        assert s.universe_ref == "all"
 
     def test_missing_optional_sections(self):
         # / strategy with only id/name should still init

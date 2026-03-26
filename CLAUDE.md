@@ -259,7 +259,7 @@ Each strategy is a JSON file in configs/strategies/. The LLM evolution agent rea
   "parent_id": "strategy_base_001",
   "description": "Buy when Bollinger bands show oversold AND P/E is below sector average",
   "asset_class": "stocks",
-  "universe": ["AAPL", "MSFT", "GOOG", "AMZN", "NVDA", "META", "TSLA"],
+  "universe": "all_stocks",
 
   "fundamental_filters": {
     "pe_ratio_max": 35,
