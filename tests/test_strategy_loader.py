@@ -393,14 +393,27 @@ class TestEmptyUniverse:
     def test_empty_universe_rejected(self):
         raw = _minimal_config()
         raw["universe"] = []
-        with pytest.raises(ValidationError, match="universe must have at least one symbol"):
+        with pytest.raises(ValidationError, match="universe must not be empty"):
             validate_config(raw)
 
     def test_single_symbol_allowed(self):
         raw = _minimal_config()
         raw["universe"] = ["BTC-USD"]
         config = validate_config(raw)
-        assert config.universe == ["BTC-USD"]
+        # / list gets joined to comma-separated string
+        assert config.universe == "BTC-USD"
+
+    def test_string_universe_reference(self):
+        raw = _minimal_config()
+        raw["universe"] = "all_stocks"
+        config = validate_config(raw)
+        assert config.universe == "all_stocks"
+
+    def test_empty_string_universe_rejected(self):
+        raw = _minimal_config()
+        raw["universe"] = ""
+        with pytest.raises(ValidationError, match="universe must not be empty"):
+            validate_config(raw)
 
 
 # / --- load_config_file ---
