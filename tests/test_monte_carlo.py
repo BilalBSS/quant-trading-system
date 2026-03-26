@@ -201,3 +201,94 @@ def test_run_simulation_antithetic_reduces_variance():
     ci_width_none = result_none["ci_upper"] - result_none["ci_lower"]
     ci_width_anti = result_anti["ci_upper"] - result_anti["ci_lower"]
     assert ci_width_anti < ci_width_none
+
+
+# --- additional deep tests ---
+
+
+def test_antithetic_exact_negation():
+    # / z[i] == -z[i+n] for each pair in antithetic sample
+    rng = np.random.default_rng(123)
+    n = 200
+    dim = 4
+    result = antithetic_sample(rng, n=n, dim=dim)
+    first_half = result[:n]
+    second_half = result[n:]
+    np.testing.assert_array_almost_equal(first_half, -second_half)
+
+
+def test_stratified_covers_all_strata():
+    # / each stratum gets at least one sample when n >= strata
+    rng = np.random.default_rng(42)
+    from scipy.stats import norm
+    n = 100
+    strata = 10
+    result = stratified_sample(rng, n=n, strata=strata)
+    # / inverse-transform back to uniform to check strata coverage
+    u = norm.cdf(result)
+    for i in range(strata):
+        lo = i / strata
+        hi = (i + 1) / strata
+        count = np.sum((u >= lo) & (u < hi))
+        assert count >= 1, f"stratum [{lo}, {hi}) has no samples"
+
+
+def test_stratified_with_n_less_than_strata():
+    # / still works when n < strata, some strata will be empty
+    rng = np.random.default_rng(42)
+    n = 3
+    strata = 10
+    result = stratified_sample(rng, n=n, strata=strata)
+    assert len(result) == n
+    assert np.all(np.isfinite(result))
+
+
+def test_control_variate_known_answer():
+    # / construct a case where mc and control are perfectly correlated
+    # / mc = 2*x + 1, control = x, control_exact = 0
+    # / true mean of mc = 2*E[x] + 1 = 1 (since E[x]=0)
+    rng = np.random.default_rng(42)
+    n = 1000
+    x = rng.standard_normal(n)
+    mc_estimates = 2 * x + 1.0
+    control_estimates = x.copy()
+    control_exact = 0.0
+    mean, vr_ratio = control_variate_adjust(mc_estimates, control_estimates, control_exact)
+    # / adjusted mean should be very close to 1.0
+    assert abs(mean - 1.0) < 0.05
+    # / perfect correlation means huge variance reduction
+    assert vr_ratio > 5.0
+
+
+def test_control_variate_zero_ctrl_variance_returns_crude_mean():
+    # / when control has zero variance, return crude mean with ratio 1.0
+    mc = np.array([2.0, 4.0, 6.0, 8.0, 10.0])
+    ctrl = np.array([5.0, 5.0, 5.0, 5.0, 5.0])
+    mean, vr_ratio = control_variate_adjust(mc, ctrl, 5.0)
+    assert mean == pytest.approx(np.mean(mc))
+    assert vr_ratio == 1.0
+
+
+def test_run_simulation_none_method_uses_raw_normal():
+    # / variance_reduction="none" uses raw standard normal samples
+    rng = np.random.default_rng(42)
+    func = lambda samples: samples[:, 0]
+    result = run_simulation(func, n_samples=500, variance_reduction="none", rng=rng, dim=1)
+    assert result["vr_method"] == "none"
+    assert result["n_effective"] == 500
+    assert np.isfinite(result["mean"])
+
+
+def test_run_simulation_returns_ci_contains_mean():
+    # / confidence interval must contain the mean
+    rng = np.random.default_rng(42)
+    func = lambda samples: samples[:, 0]
+    result = run_simulation(func, n_samples=2000, variance_reduction="antithetic", rng=rng, dim=1)
+    assert result["ci_lower"] <= result["mean"] <= result["ci_upper"]
+
+
+def test_variance_reduction_ratio_less_than_1_means_no_improvement():
+    # / ratio < 1 means reduced_var > crude_var (worse)
+    ratio = variance_reduction_ratio(1.0, 5.0)
+    assert ratio < 1.0
+    assert ratio == pytest.approx(0.2)

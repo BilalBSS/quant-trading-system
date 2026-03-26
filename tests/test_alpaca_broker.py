@@ -196,3 +196,135 @@ class TestAlpacaBrokerCancelOrder:
             with patch.dict("os.environ", {"ALPACA_API_KEY": "test", "ALPACA_SECRET_KEY": "test"}):
                 result = await broker.cancel_order("order123")
         assert result is True
+
+
+# ---------- new deep tests ----------
+
+
+class TestParseOrderDeep:
+    def test_cancelled_status(self):
+        data = {
+            "id": "cancel123",
+            "symbol": "TSLA",
+            "side": "buy",
+            "qty": "20",
+            "type": "limit",
+            "status": "canceled",
+            "filled_qty": "0",
+            "filled_avg_price": None,
+            "limit_price": "200.00",
+            "stop_price": None,
+            "created_at": "2026-03-25T10:00:00Z",
+            "filled_at": None,
+        }
+        order = _parse_order(data)
+        assert order.status == "canceled"
+        assert order.filled_qty == 0.0
+        assert order.filled_price is None
+        assert order.limit_price == 200.0
+
+    def test_partial_fill(self):
+        data = {
+            "id": "partial123",
+            "symbol": "AAPL",
+            "side": "buy",
+            "qty": "100",
+            "type": "limit",
+            "status": "partially_filled",
+            "filled_qty": "37",
+            "filled_avg_price": "149.50",
+            "limit_price": "150.00",
+            "stop_price": None,
+            "created_at": "2026-03-25T10:00:00Z",
+            "filled_at": None,
+        }
+        order = _parse_order(data)
+        assert order.status == "partially_filled"
+        assert order.qty == 100.0
+        assert order.filled_qty == 37.0
+        assert order.filled_price == 149.50
+
+    def test_missing_optional_fields(self):
+        # / minimal data with missing optional fields
+        data = {
+            "id": "min123",
+            "symbol": "GOOG",
+            "side": "sell",
+            "qty": "5",
+            "type": "market",
+            "status": "filled",
+            "filled_avg_price": "2800.00",
+            "created_at": None,
+            "filled_at": None,
+        }
+        order = _parse_order(data)
+        assert order.order_id == "min123"
+        assert order.qty == 5.0
+        assert order.filled_qty == 0.0  # / missing filled_qty defaults to 0
+        assert order.limit_price is None
+        assert order.stop_price is None
+        assert order.created_at is None
+        assert order.filled_at is None
+
+
+class TestAlpacaBrokerGetPriceDeep:
+    @pytest.mark.asyncio
+    async def test_raises_on_zero_price(self):
+        # / price <= 0 should raise ValueError
+        # / reset circuit breaker before test
+        from src.data.resilience import _breakers
+        _breakers.pop("alpaca_broker", None)
+
+        broker = AlpacaBroker()
+        mock_resp = _mock_response({"trade": {"p": 0}})
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.__aexit__.return_value = False
+        mock_client.get.return_value = mock_resp
+
+        with patch("src.brokers.alpaca_broker.httpx.AsyncClient", return_value=mock_client):
+            with patch.dict("os.environ", {"ALPACA_API_KEY": "test", "ALPACA_SECRET_KEY": "test"}):
+                with pytest.raises(Exception):
+                    await broker.get_price("AAPL")
+
+    @pytest.mark.asyncio
+    async def test_raises_on_negative_price(self):
+        # / reset circuit breaker before test
+        from src.data.resilience import _breakers
+        _breakers.pop("alpaca_broker", None)
+
+        broker = AlpacaBroker()
+        mock_resp = _mock_response({"trade": {"p": -5.0}})
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.__aexit__.return_value = False
+        mock_client.get.return_value = mock_resp
+
+        with patch("src.brokers.alpaca_broker.httpx.AsyncClient", return_value=mock_client):
+            with patch.dict("os.environ", {"ALPACA_API_KEY": "test", "ALPACA_SECRET_KEY": "test"}):
+                with pytest.raises(Exception):
+                    await broker.get_price("AAPL")
+
+
+class TestAlpacaBrokerCancelOrderDeep:
+    @pytest.mark.asyncio
+    async def test_cancel_returns_false_on_404(self):
+        # / reset circuit breaker before test
+        from src.data.resilience import _breakers
+        _breakers.pop("alpaca_broker", None)
+
+        broker = AlpacaBroker()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.__aexit__.return_value = False
+        mock_client.delete.return_value = mock_resp
+
+        with patch("src.brokers.alpaca_broker.httpx.AsyncClient", return_value=mock_client):
+            with patch.dict("os.environ", {"ALPACA_API_KEY": "test", "ALPACA_SECRET_KEY": "test"}):
+                result = await broker.cancel_order("nonexistent")
+        assert result is False

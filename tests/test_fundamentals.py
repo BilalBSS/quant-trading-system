@@ -50,6 +50,19 @@ class TestSafeDecimal:
     def test_returns_none_for_invalid_string(self):
         assert _safe_decimal("not_a_number") is None
 
+    def test_returns_none_for_negative_infinity(self):
+        assert _safe_decimal(float("-inf")) is None
+
+    def test_converts_very_small_float(self):
+        result = _safe_decimal(1e-300)
+        assert isinstance(result, Decimal)
+        assert result > 0
+
+    def test_returns_none_for_boolean_input(self):
+        # / str(True) = "True" which is not a valid decimal -> returns None
+        assert _safe_decimal(True) is None
+        assert _safe_decimal(False) is None
+
 
 class TestComputeFcfMargin:
     def test_computes_margin(self):
@@ -73,6 +86,18 @@ class TestComputeFcfMargin:
         info = {"freeCashflow": -500000, "totalRevenue": 5000000}
         result = _compute_fcf_margin(info)
         assert result == Decimal("-0.1")
+
+    def test_both_negative_fcf_and_revenue(self):
+        # / negative / negative = positive margin
+        info = {"freeCashflow": -100, "totalRevenue": -500}
+        result = _compute_fcf_margin(info)
+        assert result is not None
+        assert result > 0
+
+    def test_very_large_numbers(self):
+        info = {"freeCashflow": 1_000_000_000_000, "totalRevenue": 5_000_000_000_000}
+        result = _compute_fcf_margin(info)
+        assert result == Decimal("0.2")
 
 
 class TestComputeSectorAverages:
@@ -105,6 +130,42 @@ class TestComputeSectorAverages:
         data: list = []
         _compute_sector_averages(data)
         # / should not crash
+
+    def test_single_stock_in_sector(self):
+        # / avg = its own value when only one stock
+        data = [
+            {"symbol": "AAPL", "sector": "Technology", "pe_ratio": Decimal("25"), "ps_ratio": Decimal("7")},
+        ]
+        _compute_sector_averages(data)
+        assert data[0]["sector_pe_avg"] == Decimal("25")
+        assert data[0]["sector_ps_avg"] == Decimal("7")
+
+    def test_all_none_values_in_sector(self):
+        data = [
+            {"symbol": "A", "sector": "Healthcare", "pe_ratio": None, "ps_ratio": None},
+            {"symbol": "B", "sector": "Healthcare", "pe_ratio": None, "ps_ratio": None},
+        ]
+        _compute_sector_averages(data)
+        assert data[0]["sector_pe_avg"] is None
+        assert data[0]["sector_ps_avg"] is None
+
+    def test_three_sectors_computed_independently(self):
+        data = [
+            {"symbol": "AAPL", "sector": "Tech", "pe_ratio": Decimal("30"), "ps_ratio": Decimal("10")},
+            {"symbol": "MSFT", "sector": "Tech", "pe_ratio": Decimal("40"), "ps_ratio": Decimal("20")},
+            {"symbol": "JPM", "sector": "Finance", "pe_ratio": Decimal("12"), "ps_ratio": Decimal("3")},
+            {"symbol": "PFE", "sector": "Health", "pe_ratio": Decimal("18"), "ps_ratio": Decimal("5")},
+        ]
+        _compute_sector_averages(data)
+        # / tech avg pe = (30+40)/2 = 35
+        assert data[0]["sector_pe_avg"] == Decimal("35")
+        assert data[1]["sector_pe_avg"] == Decimal("35")
+        # / finance avg pe = 12
+        assert data[2]["sector_pe_avg"] == Decimal("12")
+        # / health avg pe = 18
+        assert data[3]["sector_pe_avg"] == Decimal("18")
+        # / all independent — finance != tech
+        assert data[2]["sector_pe_avg"] != data[0]["sector_pe_avg"]
 
 
 class TestFetchFundamentals:
@@ -269,3 +330,27 @@ class TestStoreFundamentals:
 
         count = await store_fundamentals(pool, data)
         assert count == 1
+
+    @pytest.mark.asyncio
+    async def test_upsert_on_duplicate_symbol_date(self):
+        # / store_fundamentals uses ON CONFLICT (symbol, date) DO UPDATE
+        data = [
+            {"symbol": "AAPL", "date": date.today(),
+             "pe_ratio": Decimal("28"), "pe_forward": Decimal("24"),
+             "ps_ratio": Decimal("9"), "peg_ratio": None,
+             "revenue_growth_1y": Decimal("0.10"), "revenue_growth_3y": None,
+             "fcf_margin": Decimal("0.25"), "debt_to_equity": Decimal("40"),
+             "sector": "Technology", "sector_pe_avg": Decimal("30"),
+             "sector_ps_avg": Decimal("10")},
+        ]
+
+        mock_conn = AsyncMock()
+        pool = _mock_pool(mock_conn)
+
+        count = await store_fundamentals(pool, data)
+        assert count == 1
+        # / verify the sql uses ON CONFLICT for upsert
+        call_args = mock_conn.execute.call_args
+        sql = call_args[0][0]
+        assert "ON CONFLICT" in sql
+        assert "DO UPDATE" in sql

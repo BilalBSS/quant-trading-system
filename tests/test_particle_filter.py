@@ -208,3 +208,116 @@ def test_logits_clipped():
         pf.predict()
     assert np.all(pf._logits >= -10.0)
     assert np.all(pf._logits <= 10.0)
+
+
+# / --- additional deep tests ---
+
+
+def test_predict_increments_step():
+    pf = _make_filter()
+    for i in range(5):
+        assert pf.step == i
+        pf.predict()
+        assert pf.step == i + 1
+
+
+def test_update_does_not_increment_step():
+    pf = _make_filter()
+    pf.predict()
+    step_before = pf.step
+    pf.update(0.5)
+    assert pf.step == step_before
+    pf.update(0.7)
+    assert pf.step == step_before
+
+
+def test_particles_bounded_0_to_1():
+    # / after predict and update cycles, particles stay in [0, 1]
+    pf = _make_filter(n_particles=500, process_noise=0.5)
+    rng = np.random.default_rng(99)
+    for _ in range(100):
+        pf.predict()
+        pf.update(rng.uniform(0.0, 1.0))
+    assert np.all(pf.particles >= 0.0)
+    assert np.all(pf.particles <= 1.0)
+
+
+def test_weights_nonnegative_after_update():
+    pf = _make_filter()
+    pf.predict()
+    pf.update(0.5)
+    assert np.all(pf.weights >= 0.0)
+    pf.predict()
+    pf.update(0.99)
+    assert np.all(pf.weights >= 0.0)
+
+
+def test_estimate_is_weighted_mean_of_particles():
+    # / estimate = sum(weights * particles)
+    pf = _make_filter(n_particles=200)
+    pf.predict()
+    pf.update(0.6)
+    expected = float(np.sum(pf.weights * pf.particles))
+    assert abs(pf.estimate() - expected) < 1e-12
+
+
+def test_single_particle_works():
+    pf = ParticleFilter(n_particles=1, process_noise=0.1, observation_noise=0.5, rng=np.random.default_rng(42))
+    pf.predict()
+    pf.update(0.5)
+    est = pf.estimate()
+    assert 0.0 <= est <= 1.0
+    assert pf.step == 1
+
+
+def test_strong_observation_shifts_estimate():
+    # / observe 0.9 with low noise => estimate should move toward 0.9
+    pf = _make_filter(n_particles=1000, observation_noise=0.05, rng=np.random.default_rng(42))
+    for _ in range(30):
+        pf.predict()
+        pf.update(0.9)
+    est = pf.estimate()
+    assert est > 0.75, f"expected estimate near 0.9, got {est}"
+
+
+def test_weak_observation_does_not_shift_much():
+    # / high obs_noise means observations are weak -> estimate stays near prior
+    pf = _make_filter(n_particles=1000, observation_noise=10.0, rng=np.random.default_rng(42))
+    initial_est = pf.estimate()
+    pf.predict()
+    pf.update(0.99)
+    est_after = pf.estimate()
+    # / with very high noise, the shift should be small
+    assert abs(est_after - initial_est) < 0.2
+
+
+def test_resampling_resets_weights_uniform():
+    pf = _make_filter(n_particles=200)
+    # / manually create skewed weights
+    pf._weights = np.zeros(200)
+    pf._weights[0] = 0.5
+    pf._weights[1] = 0.3
+    pf._weights[2] = 0.2
+    pf.resample()
+    expected = np.ones(200) / 200
+    np.testing.assert_allclose(pf.weights, expected, atol=1e-12)
+
+
+def test_ess_equals_n_when_weights_uniform():
+    pf = _make_filter(n_particles=300)
+    # / initial weights are uniform
+    ess = pf.effective_sample_size()
+    np.testing.assert_allclose(ess, 300.0, atol=1e-10)
+
+
+def test_weight_collapse_recovery():
+    # / when all likelihoods are near zero, weights should reset to uniform
+    pf = _make_filter(n_particles=100, observation_noise=0.001, rng=np.random.default_rng(42))
+    # / initialize particles far from the observation via logit manipulation
+    pf._logits = np.full(100, scipy_logit(0.01))  # / all particles near 0.01
+    pf._weights = np.ones(100) / 100
+    # / observe 0.99 with very tight noise -> all likelihoods near zero
+    pf.update(0.99)
+    # / filter should recover, weights should be valid (sum to 1)
+    np.testing.assert_allclose(np.sum(pf.weights), 1.0, atol=1e-12)
+    assert np.all(pf.weights >= 0.0)

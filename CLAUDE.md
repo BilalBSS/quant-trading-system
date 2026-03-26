@@ -16,7 +16,7 @@ Self-improving agentic trading system for US stocks (via Alpaca, commission-free
 - **Phase 4** (indicators + broker layer): COMPLETE — trend, momentum, volatility, volume indicators + paper_broker, alpaca_broker, broker_factory
 - **Phase 5** (strategy + backtesting): COMPLETE — base_strategy, strategy_loader, strategy_pool, backtest + 10 seed configs
 - **Phase 6** (quant engine): COMPLETE — monte_carlo, importance_sampling, risk_metrics, brier_score, particle_filter, copula_models
-- **764 tests passing** (98 Phase 1 + 75 Phase 2 + 96 Phase 3 + 97 Phase 4 + 282 Phase 5 + 116 Phase 6)
+- **1067 tests passing** (129 Phase 1 + 125 Phase 2 + 152 Phase 3 + 164 Phase 4 + 329 Phase 5 + 168 Phase 6)
 
 ## Phases
 
@@ -179,39 +179,39 @@ quant-trading-system/
 │   └── dashboard/               # [Phase 9] web dashboard
 │       ├── app.py               # FastAPI backend serving analysis + trading data
 │       └── templates/           # HTML templates or React frontend
-├── tests/                       # test suite — 764 tests passing
+├── tests/                       # test suite — 1067 tests passing
 │   ├── __init__.py
-│   ├── test_db.py               # [BUILT] 12 tests — pool init, migrations, masking
-│   ├── test_symbols.py          # [BUILT] 24 tests — symbol conversion, universes
-│   ├── test_resilience.py       # [BUILT] 9 tests — retry, circuit breaker
-│   ├── test_validators.py       # [BUILT] 28 tests — bounds, ohlcv, fundamentals, sentiment
-│   ├── test_market_data.py      # [BUILT] 21 tests — alpaca, yfinance, backfill, store
-│   ├── test_fundamentals.py     # [BUILT] 19 tests — fetch, store, sector averages
-│   ├── test_sec_filings.py      # [BUILT] 17 tests — insider trades, data quality
-│   ├── test_regime_detector.py  # [BUILT] 18 tests — classify, indicators, backfill
-│   ├── test_ratio_analysis.py   # [BUILT] 27 tests — pe/ps/peg/fcf/de scoring, composite, db
-│   ├── test_dcf_model.py        # [BUILT] 14 tests — simulation, assumptions, storage
-│   ├── test_sensitivity.py      # [BUILT] 7 tests — matrix shape, monotonicity, driver detection
-│   ├── test_earnings_signals.py # [BUILT] 13 tests — surprise, streaks, fetch, pipeline
-│   ├── test_insider_activity.py # [BUILT] 17 tests — weighting, clusters, signals, db
-│   ├── test_ai_summary.py       # [BUILT] 10 tests — prompt, fallback, groq mock, errors
-│   ├── test_trend.py            # [BUILT] 14 tests — sma, ema, macd, adx, supertrend
-│   ├── test_momentum.py         # [BUILT] 13 tests — rsi, stochastic, cci, williams_r, roc
-│   ├── test_volatility.py       # [BUILT] 11 tests — bollinger, atr, keltner
-│   ├── test_volume.py           # [BUILT] 13 tests — obv, vwap, volume_profile, mfi
-│   ├── test_paper_broker.py     # [BUILT] 19 tests — orders, positions, balance, cancel, stream
-│   ├── test_alpaca_broker.py    # [BUILT] 7 tests — mocked rest api, parse_order
-│   ├── test_broker_factory.py   # [BUILT] 7 tests — paper/live mode, routing
-│   ├── test_base_strategy.py    # [BUILT] 87 tests — entry/exit signals, fundamentals, position sizing, indicators
-│   ├── test_strategy_loader.py  # [BUILT] 86 tests — pydantic validation, config loading, track constraints, path safety
-│   ├── test_strategy_pool.py    # [BUILT] 69 tests — ranking, quartiles, lifecycle, composite score
-│   ├── test_backtest.py         # [BUILT] 40 tests — anti-lookahead, sharpe/sortino/drawdown, trade stats
-│   ├── test_monte_carlo.py      # [BUILT] 18 tests — antithetic, stratified, control variates, variance reduction
-│   ├── test_importance_sampling.py # [BUILT] 16 tests — exponential tilt, tail probability, ESS, optimal gamma
-│   ├── test_risk_metrics.py     # [BUILT] 22 tests — VaR, CVaR, drawdown, EVT, risk summary
-│   ├── test_brier_score.py      # [BUILT] 14 tests — brier score, calibration curve, decomposition, rolling
-│   ├── test_particle_filter.py  # [BUILT] 22 tests — init, predict, update, convergence, resampling, ESS
-│   ├── test_copula_models.py    # [BUILT] 24 tests — gaussian/t/clayton fit, tail dependence, simulation, portfolio risk
+│   ├── test_db.py               # [BUILT] 19 tests — pool init, migrations, masking, race conditions, env vars
+│   ├── test_symbols.py          # [BUILT] 42 tests — symbol conversion, universes, resolve_universe, roundtrip
+│   ├── test_resilience.py       # [BUILT] 17 tests — retry, circuit breaker, half-open, backoff, exception types
+│   ├── test_validators.py       # [BUILT] 51 tests — bounds, ohlcv, fundamentals, sentiment, boundary precision, decimals
+│   ├── test_market_data.py      # [BUILT] 29 tests — alpaca, yfinance, backfill, store, upsert, incremental
+│   ├── test_fundamentals.py     # [BUILT] 33 tests — fetch, store, sector averages, safe_decimal, fcf_margin, upsert
+│   ├── test_sec_filings.py      # [BUILT] 28 tests — insider trades, data quality, multi-type forms, fallback attrs
+│   ├── test_regime_detector.py  # [BUILT] 35 tests — classify, indicators, backfill, transitions, exact calcs
+│   ├── test_ratio_analysis.py   # [BUILT] 48 tests — pe/ps/peg/fcf/de exact formulas, composite weights, db
+│   ├── test_dcf_model.py        # [BUILT] 23 tests — simulation, assumptions, storage, clamping, proportionality
+│   ├── test_sensitivity.py      # [BUILT] 14 tests — matrix shape, monotonicity, driver detection, single cell, ties
+│   ├── test_earnings_signals.py # [BUILT] 18 tests — surprise, streaks, fetch, pipeline, threshold boundary, clamping
+│   ├── test_insider_activity.py # [BUILT] 29 tests — weighting, clusters, signals, db, net_buy_ratio formula, boundaries
+│   ├── test_ai_summary.py       # [BUILT] 20 tests — prompt, fallback, groq mock, errors, confidence calc, cluster line
+│   ├── test_trend.py            # [BUILT] 29 tests — sma/ema exact values, macd algebraic, adx ranges, supertrend flips
+│   ├── test_momentum.py         # [BUILT] 31 tests — rsi bounds, stochastic at extremes, cci known, williams_r bounds, roc exact
+│   ├── test_volatility.py       # [BUILT] 21 tests — bollinger exact formula/pct_b, atr convergence, keltner formula
+│   ├── test_volume.py           # [BUILT] 24 tests — obv exact cumsum, vwap formula, profile poc/value_area, mfi bounds
+│   ├── test_paper_broker.py     # [BUILT] 33 tests — orders, positions, balance, avg price calc, close position, limit fills
+│   ├── test_alpaca_broker.py    # [BUILT] 14 tests — mocked rest api, parse_order, cancelled/partial, price validation
+│   ├── test_broker_factory.py   # [BUILT] 12 tests — paper/live mode, routing, invalid mode, case sensitivity
+│   ├── test_base_strategy.py    # [BUILT] 101 tests — entry/exit signals, fundamentals, position sizing, kelly exact, boundaries
+│   ├── test_strategy_loader.py  # [BUILT] 97 tests — pydantic validation, config loading, track constraints, path safety, boundaries
+│   ├── test_strategy_pool.py    # [BUILT] 78 tests — ranking, quartiles, lifecycle, composite exact formula, weights
+│   ├── test_backtest.py         # [BUILT] 53 tests — anti-lookahead, sharpe/sortino exact, drawdown exact, edge cases
+│   ├── test_monte_carlo.py      # [BUILT] 26 tests — antithetic exact negation, stratified strata coverage, control variate known answer
+│   ├── test_importance_sampling.py # [BUILT] 23 tests — exponential tilt, tail P(Z>2)≈0.0228, ESS identity, optimal gamma formula
+│   ├── test_risk_metrics.py     # [BUILT] 32 tests — VaR exact normal, CVaR≥VaR invariant, drawdown exact, EVT shape, annualization
+│   ├── test_brier_score.py      # [BUILT] 20 tests — brier exact, decomposition identity, calibration bins, rolling window=1
+│   ├── test_particle_filter.py  # [BUILT] 33 tests — bounded particles, weight invariants, convergence, collapse recovery
+│   ├── test_copula_models.py    # [BUILT] 34 tests — gaussian λ=0, t-copula monotonicity, clayton formula, correlation recovery
 │   └── conftest.py              # [BUILT] shared fixtures
 ├── reports/                     # auto-generated evolution reports
 │   └── .gitkeep
@@ -454,18 +454,25 @@ TELEGRAM_CHAT_ID=xxx           # optional
 
 Run: `python -m pytest tests/ -v`
 
-764 tests passing across 32 test files. Every module has tests. Key patterns:
+1067 tests passing across 32 test files. Every module has tests.
+
+### Testing Philosophy
+Tests are written to **pinpoint failures**, not to pass. Every test answers a specific question:
+- **Does the math match the formula?** Hand-computed reference values verified against source code formulas (e.g., PE score = (2.0-ratio)/1.5*100, Brier = mean((p-o)²), VaR = -(mu + z*sigma))
+- **Do invariants hold?** Mathematical properties verified (CVaR >= VaR, particles bounded [0,1], weights sum to 1, correlation matrix positive definite, ADX in [0,100])
+- **Do boundaries behave correctly?** Exact boundary values tested (pe_ratio_max at limit, max_position_pct at 0.10, max_holding_days exactly reached)
+- **Do edge cases fail gracefully?** Division by zero (constant prices), empty data, NaN propagation, missing fields, negative inputs
+- **Does the financial logic work?** Anti-lookahead verified (signal at previous close, fill at next open), stop loss exact trigger price, fill at better of market/limit, position weighted average cost
+
+### Testing Patterns
 - **asyncpg pool mocking**: use `_mock_pool()` helper — `MagicMock` for pool, `AsyncMock` for context manager and connection
 - **external API mocking**: patch httpx.AsyncClient for alpaca, patch yfinance.Ticker for yfinance, patch edgartools for SEC
 - **data validation**: test both valid and invalid inputs, verify graceful handling of edge cases
 - **numpy seeded RNG**: use `np.random.default_rng(42)` for deterministic MC tests
-- Analysis tests: verify DCF math, scoring monotonicity, sensitivity grid shape
-- Broker tests: use PaperBroker to verify order flow without real API calls
-- Strategy tests: use known historical data with known outcomes
-- Indicator tests: verify against known indicator values from TradingView
-- Backtest tests: verify P&L calculation, drawdown calculation, Sharpe calculation
-- Quant tests: verify variance reduction ratios, copula tail dependence, particle filter convergence
-- Evolution tests: verify mutation produces valid strategy configs
+- **hand-computed reference values**: every scoring formula, financial metric, and mathematical formula has at least one test with a hand-computed expected value
+- **tight tolerances**: pytest.approx with rel=0.01 or abs=0.001 where precision matters, loose only when stochastic (MC convergence)
+- **algebraic verification**: indicator outputs verified against their defining formulas (MACD = fast_ema - slow_ema, histogram = macd - signal, upper_band = middle + std_dev * rolling_std)
+- **formula decomposition tests**: composite scores verified by computing each component separately and checking the weighted sum
 
 ## Dependencies
 

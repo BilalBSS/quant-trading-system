@@ -44,6 +44,23 @@ class TestMaskUrl:
         assert "p%40ss" not in result
         assert "***" in result
 
+    def test_url_with_no_port(self):
+        url = "postgresql://user:secret@host/db"
+        result = _mask_url(url)
+        assert "secret" not in result
+        assert "***" in result
+        assert "host" in result
+
+    def test_url_with_special_chars_in_password(self):
+        url = "postgresql://user:p%40ss%23w0rd!@host:5432/db"
+        result = _mask_url(url)
+        assert "p%40ss" not in result
+        assert "***" in result
+
+    def test_malformed_url_returns_original(self):
+        url = "not-a-valid-url"
+        assert _mask_url(url) == url
+
 
 class TestGetPool:
     @pytest.mark.asyncio
@@ -99,6 +116,35 @@ class TestInitDb:
                 assert result is fake_pool
                 mock_asyncpg.create_pool.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_concurrent_init_db_returns_same_pool(self):
+        # / two concurrent calls should return the same pool instance
+        fake_pool = AsyncMock()
+        with patch("src.data.db.asyncpg") as mock_asyncpg:
+            mock_asyncpg.create_pool = AsyncMock(return_value=fake_pool)
+            with patch("src.data.db._run_migrations", new_callable=AsyncMock):
+                results = await asyncio.gather(
+                    init_db("postgresql://user:pass@host/db"),
+                    init_db("postgresql://user:pass@host/db"),
+                )
+                assert results[0] is results[1]
+                # / create_pool should only be called once despite two concurrent calls
+                assert mock_asyncpg.create_pool.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_reads_database_url_from_env(self):
+        fake_pool = AsyncMock()
+        with patch.dict("os.environ", {"DATABASE_URL": "postgresql://env:pass@host/db"}):
+            with patch("src.data.db.asyncpg") as mock_asyncpg:
+                mock_asyncpg.create_pool = AsyncMock(return_value=fake_pool)
+                with patch("src.data.db._run_migrations", new_callable=AsyncMock):
+                    result = await init_db()
+                    assert result is fake_pool
+                    mock_asyncpg.create_pool.assert_awaited_once_with(
+                        "postgresql://env:pass@host/db",
+                        min_size=2, max_size=10, command_timeout=30,
+                    )
+
 
 class TestRunMigrations:
     @pytest.mark.asyncio
@@ -121,3 +167,44 @@ class TestRunMigrations:
         # / should have called execute to create _migrations table
         calls = [str(c) for c in mock_conn.execute.call_args_list]
         assert any("_migrations" in c for c in calls)
+
+    @pytest.mark.asyncio
+    async def test_skips_already_applied_migrations(self):
+        mock_conn = AsyncMock()
+        # / simulate that 001_initial.sql has already been applied
+        mock_conn.fetch = AsyncMock(return_value=[{"filename": "001_initial.sql"}])
+
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        mock_pool = MagicMock()
+        mock_pool.acquire.return_value = mock_ctx
+
+        with patch("src.data.db.MIGRATIONS_DIR") as mock_dir:
+            mock_file = MagicMock()
+            mock_file.name = "001_initial.sql"
+            mock_dir.exists.return_value = True
+            mock_dir.glob.return_value = [mock_file]
+            await _run_migrations(mock_pool)
+
+        # / should not have read or executed the migration file
+        mock_file.read_text.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_handles_missing_sql_file_gracefully(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetch = AsyncMock(return_value=[])
+
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        mock_pool = MagicMock()
+        mock_pool.acquire.return_value = mock_ctx
+
+        with patch("src.data.db.MIGRATIONS_DIR") as mock_dir:
+            # / migrations dir does not exist
+            mock_dir.exists.return_value = False
+            # / should return gracefully, no exception
+            await _run_migrations(mock_pool)
