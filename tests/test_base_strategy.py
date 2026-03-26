@@ -266,20 +266,17 @@ class TestFundamentalFilters:
         assert result.should_enter is False
         assert any("dcf" in r for r in result.reasons)
 
-    def test_none_values_skip_filter(self):
-        # / if analysis field is none, the filter is skipped (not failed)
+    def test_none_values_reject_filter(self):
+        # / if analysis field is none and filter is configured, reject (data unavailable)
         analysis = AnalysisData(
             pe_ratio=None, sector_pe_avg=None,
             revenue_growth=None, fcf_margin=None,
             debt_to_equity=None, dcf_upside=None,
         )
         result = self.strategy.should_enter("AAPL", self.data, analysis)
-        # / should not fail on fundamentals — all none values skipped
-        assert not any(
-            "pe" in r or "revenue" in r or "fcf" in r or "d/e" in r or "dcf" in r
-            for r in result.reasons
-        ) or result.should_enter is True or \
-            any("bb" in r or "rsi" in r or "vol" in r for r in result.reasons)
+        # / should fail on fundamentals — none values mean data unavailable
+        assert result.should_enter is False
+        assert any("unavailable" in r for r in result.reasons)
 
     def test_no_fundamental_strategy_skips_filters(self):
         s = ConfigDrivenStrategy(_strategy_002_config())
