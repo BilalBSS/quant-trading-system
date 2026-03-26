@@ -80,10 +80,10 @@ class TestPlaceOrder:
 
     @pytest.mark.asyncio
     async def test_limit_buy_fillable(self, broker):
-        # / price is 150, limit at 160 — should fill at 160
+        # / price is 150, limit at 160 — should fill at market (150), the better price
         order = await broker.place_order("AAPL", 10, "buy", order_type="limit", limit_price=160.0)
         assert order.status == "filled"
-        assert order.filled_price == 160.0
+        assert order.filled_price == 150.0
 
     @pytest.mark.asyncio
     async def test_sell_removes_position(self, broker):
