@@ -12,8 +12,83 @@ Self-improving agentic trading system for US stocks (via Alpaca, commission-free
 
 - **Phase 1** (foundation): COMPLETE — db, symbols, resilience, validators, migrations
 - **Phase 2** (data layer + regime detection): COMPLETE — market_data, fundamentals, sec_filings, regime_detector, backfill script
-- **Phase 3** (analysis engine): NOT STARTED
-- **173 tests passing** (98 Phase 1 + 75 Phase 2)
+- **Phase 3** (analysis engine): COMPLETE — ratio_analysis, dcf_model, sensitivity, earnings_signals, insider_activity, ai_summary
+- **Phase 4** (indicators + broker layer): NOT STARTED
+- **269 tests passing** (98 Phase 1 + 75 Phase 2 + 96 Phase 3)
+
+## Phases
+
+### Phase 1: Foundation [COMPLETE]
+db.py, symbols.py, resilience.py, validators.py, migrations/001_initial.sql
+
+### Phase 2: Data Layer + Regime Detection [COMPLETE]
+market_data.py, fundamentals.py, sec_filings.py, regime_detector.py, scripts/backfill.py
+
+### Phase 3: Analysis Engine [COMPLETE]
+ratio_analysis.py, dcf_model.py, sensitivity.py, earnings_signals.py, insider_activity.py, ai_summary.py
+
+### Phase 4: Indicators + Broker Layer
+**Technical indicators** (src/indicators/):
+- trend.py — SMA, EMA, MACD, ADX, Supertrend
+- momentum.py — RSI, Stochastic, CCI, Williams %R, ROC
+- volatility.py — Bollinger Bands, ATR, Keltner Channel
+- volume.py — OBV, VWAP, Volume Profile, MFI
+
+**Broker layer** (src/brokers/):
+- base.py — abstract BrokerInterface
+- paper_broker.py — simulated broker for backtesting
+- alpaca_broker.py — Alpaca REST/WebSocket (stocks + crypto)
+- broker_factory.py — routes symbols to correct broker
+
+### Phase 5: Strategy Framework + Backtesting
+**Strategy framework** (src/strategies/):
+- base_strategy.py — abstract StrategyInterface
+- strategy_loader.py — loads strategy configs from JSON files
+- strategy_pool.py — manages multiple concurrent strategies
+- backtest.py — backtesting engine with P&L, drawdown, Sharpe calculation
+
+### Phase 6: Quant Engine
+**Core Monte Carlo** (src/quant/):
+- monte_carlo.py — production MC with variance reduction (antithetic variates, control variates, stratified sampling). Antithetic: use Z and -Z pairs for free ~50-75% variance reduction. Control variate: use Black-Scholes closed-form as baseline correction. Stratified: partition via quantiles, sample within each stratum, combine with Neyman allocation. Stack all three for 100-500x reduction over crude MC.
+- importance_sampling.py — exponential tilting for tail risk estimation. Shifts the sampling distribution toward the rare region (e.g., >20% crash), then corrects with likelihood ratio. Solves the problem where crude MC gives 0/1 hits on extreme events. 100 IS samples can beat 1M crude samples.
+- risk_metrics.py — VaR (parametric + historical + MC), Expected Shortfall (CVaR), max drawdown, Sharpe, Sortino. EVT-based tail estimation using Generalized Pareto for extreme quantiles.
+- brier_score.py — calibration tracking for all strategy predictions. Brier < 0.20 = good, < 0.10 = excellent. Tracked per-strategy in trade_log, used by evolution engine as scoring metric.
+
+**Real-time + correlation** (src/quant/):
+- particle_filter.py — Sequential Monte Carlo (bootstrap filter) for real-time probability updating. Maintains N particles as hypotheses about true state, reweights on each observation via likelihood, systematic resampling when ESS < N/2. Operates in logit space to keep probabilities bounded. Used by strategy agent to smooth noisy signals (earnings drops, price spikes) instead of jerking to raw values.
+- copula_models.py — Gaussian copula (no tail dependence — baseline only), Student-t copula (symmetric tail dependence, λ > 0 for finite ν), Clayton copula (lower tail dependence — crash correlation). Risk agent uses t-copula to check tail dependence between proposed trade and existing portfolio. If tail dependence > 0.3, reject or size down. Gaussian copula underestimates extreme co-movement by 2-5x — this is what blew up in 2008.
+
+### Phase 7: Agents + Evolution
+**Agent orchestrator** (src/agents/):
+- orchestrator.py — main loop coordinating all agents on schedule
+- analyst_agent.py — runs analysis engine, writes to analysis_scores
+- strategy_agent.py — generates trade signals from indicators + analysis + particle filter
+- risk_agent.py — approves/rejects trades via copula-based portfolio risk check
+- executor_agent.py — places orders through broker layer
+- tools.py — MCP-style tools each agent can call
+
+**Evolution engine** (src/evolution/):
+- evolution_engine.py — Karpathy autoresearch loop (read → rank → kill → mutate → backtest → score → promote → document)
+- strategy_mutator.py — LLM-powered strategy config mutation via Claude Haiku
+- report_generator.py — weekly evolution reports (markdown)
+- documentation.py — auto-updates docs after each evolution cycle
+
+### Phase 8: Advanced Indicators + Data Sources
+**Advanced indicators** (src/indicators/):
+- structure.py — ICT/smart money: Fair Value Gaps, Order Blocks, BOS/CHoCH
+- support_resistance.py — Pivot points, Fibonacci levels, S/R zones
+- crypto_specific.py — Funding rate, open interest, exchange flows, NVT
+
+**Additional data sources** (src/data/):
+- news_sentiment.py — Finnhub events + NLP sentiment scoring
+- crypto_data.py — CoinGecko price/market data + DefiLlama TVL/flows
+- crypto_onchain.py — Dune Analytics custom on-chain queries
+
+### Phase 9: Dashboard
+**Web dashboard** (src/dashboard/):
+- app.py — FastAPI backend serving analysis + trading data
+- templates/ — HTML templates or React frontend
+- Real-time portfolio view, analysis scores, trade log, evolution reports
 
 ## Architecture
 
@@ -36,12 +111,6 @@ quant-trading-system/
 │   ├── __init__.py
 │   └── backfill.py              # [BUILT] backfill: market_data -> regimes -> fundamentals -> insider trades
 ├── src/
-│   ├── brokers/                 # modular broker layer — swappable (not yet built)
-│   │   ├── base.py              # abstract BrokerInterface
-│   │   ├── alpaca_broker.py     # Alpaca implementation (stocks + crypto)
-│   │   ├── coinbase_broker.py   # Coinbase implementation (future, crypto)
-│   │   ├── paper_broker.py      # simulated broker for backtesting
-│   │   └── broker_factory.py    # routes symbols to correct broker
 │   ├── data/                    # data ingestion layer — all free sources
 │   │   ├── __init__.py
 │   │   ├── db.py                # [BUILT] asyncpg pool + migration runner for Neon PostgreSQL
@@ -52,54 +121,60 @@ quant-trading-system/
 │   │   ├── fundamentals.py      # [BUILT] yfinance: P/E, P/S, revenue, margins, sector averages
 │   │   ├── sec_filings.py       # [BUILT] edgartools: Form 4 insider trades
 │   │   ├── regime_detector.py   # [BUILT] market regime classification (bull/bear/sideways/high_vol)
-│   │   ├── news_sentiment.py    # Finnhub events + sentiment layer
-│   │   ├── crypto_data.py       # CoinGecko price/market data + DefiLlama flows
-│   │   ├── crypto_onchain.py    # Dune Analytics custom on-chain queries
+│   │   ├── news_sentiment.py    # [Phase 8] Finnhub events + sentiment layer
+│   │   ├── crypto_data.py       # [Phase 8] CoinGecko price/market data + DefiLlama flows
+│   │   ├── crypto_onchain.py    # [Phase 8] Dune Analytics custom on-chain queries
 │   │   └── migrations/
 │   │       └── 001_initial.sql  # [BUILT] schema for market_data, fundamentals, trades, signals
-│   ├── analysis/                # financial analysis engine (not yet built)
-│   │   ├── dcf_model.py         # discounted cash flow with Monte Carlo simulation
-│   │   ├── ratio_analysis.py    # P/E, P/S, PEG, debt-to-equity, FCF margin
-│   │   ├── sensitivity.py       # sensitivity matrix (growth rate x terminal multiple)
-│   │   ├── earnings_signals.py  # earnings surprise, guidance, estimate revisions
-│   │   ├── insider_activity.py  # SEC Form 4 — insider buys/sells
-│   │   └── ai_summary.py       # Groq free tier — natural language analysis summary
-│   ├── indicators/              # technical indicator library (not yet built)
+│   ├── analysis/                # financial analysis engine
+│   │   ├── ratio_analysis.py    # [BUILT] P/E, P/S, PEG, debt-to-equity, FCF margin scoring (0-100)
+│   │   ├── dcf_model.py         # [BUILT] DCF with Monte Carlo simulation (10k runs, p10/median/p90)
+│   │   ├── sensitivity.py       # [BUILT] growth rate x terminal multiple sensitivity grid
+│   │   ├── earnings_signals.py  # [BUILT] earnings surprise detection, beat streaks, signal scoring
+│   │   ├── insider_activity.py  # [BUILT] insider buy/sell aggregation, cluster detection, title weighting
+│   │   └── ai_summary.py       # [BUILT] Groq free tier summary with structured fallback
+│   ├── indicators/              # [Phase 4] technical indicator library
 │   │   ├── trend.py             # SMA, EMA, MACD, ADX, Supertrend
 │   │   ├── momentum.py          # RSI, Stochastic, CCI, Williams %R, ROC
 │   │   ├── volatility.py        # Bollinger Bands, ATR, Keltner Channel
 │   │   ├── volume.py            # OBV, VWAP, Volume Profile, MFI
-│   │   ├── structure.py         # Fair Value Gaps, Order Blocks, Structure Breaks
-│   │   ├── support_resistance.py # Pivot points, Fibonacci levels, S/R zones
-│   │   └── crypto_specific.py   # Funding rate, open interest, exchange flows, NVT
-│   ├── quant/                   # quantitative engines (not yet built)
-│   │   ├── monte_carlo.py       # Monte Carlo simulation + variance reduction
-│   │   ├── importance_sampling.py # rare event estimation for tail risk
-│   │   ├── particle_filter.py   # Sequential Monte Carlo for real-time updating
-│   │   ├── copula_models.py     # Gaussian, t-copula, Clayton for correlation
-│   │   ├── risk_metrics.py      # VaR, Expected Shortfall, max drawdown
-│   │   └── brier_score.py       # calibration tracking for predictions
-│   ├── strategies/              # strategy framework (not yet built)
+│   │   ├── structure.py         # [Phase 8] Fair Value Gaps, Order Blocks, Structure Breaks
+│   │   ├── support_resistance.py # [Phase 8] Pivot points, Fibonacci levels, S/R zones
+│   │   └── crypto_specific.py   # [Phase 8] Funding rate, open interest, exchange flows, NVT
+│   ├── brokers/                 # [Phase 4] modular broker layer — swappable
+│   │   ├── base.py              # abstract BrokerInterface
+│   │   ├── alpaca_broker.py     # Alpaca implementation (stocks + crypto)
+│   │   ├── coinbase_broker.py   # Coinbase implementation (future, crypto)
+│   │   ├── paper_broker.py      # simulated broker for backtesting
+│   │   └── broker_factory.py    # routes symbols to correct broker
+│   ├── strategies/              # [Phase 5] strategy framework
 │   │   ├── base_strategy.py     # abstract StrategyInterface
 │   │   ├── strategy_loader.py   # loads strategy configs from JSON files
 │   │   ├── strategy_pool.py     # manages multiple concurrent strategies
 │   │   └── backtest.py          # backtesting engine — scores strategies
-│   ├── agents/                  # runtime agentic team (not yet built)
+│   ├── quant/                   # [Phase 6] quantitative engines
+│   │   ├── monte_carlo.py       # MC simulation + variance reduction (antithetic + control + stratified)
+│   │   ├── importance_sampling.py # exponential tilting for tail risk (100x-10000x variance reduction)
+│   │   ├── particle_filter.py   # Sequential Monte Carlo for real-time updating (bootstrap filter)
+│   │   ├── copula_models.py     # Gaussian, Student-t, Clayton copulas for tail dependence
+│   │   ├── risk_metrics.py      # VaR, CVaR, max drawdown, EVT-based tail estimation
+│   │   └── brier_score.py       # calibration tracking for strategy predictions
+│   ├── agents/                  # [Phase 7] runtime agentic team
 │   │   ├── orchestrator.py      # main loop — coordinates all agents
 │   │   ├── analyst_agent.py     # runs financial analysis, scores stocks
 │   │   ├── strategy_agent.py    # generates trade signals from indicators + analysis
 │   │   ├── risk_agent.py        # approves/rejects trades, checks portfolio risk
 │   │   ├── executor_agent.py    # places orders through broker layer
 │   │   └── tools.py             # MCP-style tools each agent can call
-│   ├── evolution/               # autoresearch loop (not yet built)
+│   ├── evolution/               # [Phase 7] autoresearch loop
 │   │   ├── evolution_engine.py  # reads logs -> proposes mutations -> backtests -> keeps/discards
 │   │   ├── strategy_mutator.py  # LLM-powered strategy config mutation
 │   │   ├── report_generator.py  # weekly evolution reports (markdown)
 │   │   └── documentation.py     # auto-updates docs after each evolution cycle
-│   └── dashboard/               # web dashboard (not yet built)
+│   └── dashboard/               # [Phase 9] web dashboard
 │       ├── app.py               # FastAPI backend serving analysis + trading data
 │       └── templates/           # HTML templates or React frontend
-├── tests/                       # test suite — 173 tests passing
+├── tests/                       # test suite — 269 tests passing
 │   ├── __init__.py
 │   ├── test_db.py               # [BUILT] 12 tests — pool init, migrations, masking
 │   ├── test_symbols.py          # [BUILT] 24 tests — symbol conversion, universes
@@ -109,6 +184,12 @@ quant-trading-system/
 │   ├── test_fundamentals.py     # [BUILT] 19 tests — fetch, store, sector averages
 │   ├── test_sec_filings.py      # [BUILT] 17 tests — insider trades, data quality
 │   ├── test_regime_detector.py  # [BUILT] 18 tests — classify, indicators, backfill
+│   ├── test_ratio_analysis.py   # [BUILT] 27 tests — pe/ps/peg/fcf/de scoring, composite, db
+│   ├── test_dcf_model.py        # [BUILT] 14 tests — simulation, assumptions, storage
+│   ├── test_sensitivity.py      # [BUILT] 7 tests — matrix shape, monotonicity, driver detection
+│   ├── test_earnings_signals.py # [BUILT] 13 tests — surprise, streaks, fetch, pipeline
+│   ├── test_insider_activity.py # [BUILT] 17 tests — weighting, clusters, signals, db
+│   ├── test_ai_summary.py       # [BUILT] 10 tests — prompt, fallback, groq mock, errors
 │   └── conftest.py              # [BUILT] shared fixtures
 ├── reports/                     # auto-generated evolution reports
 │   └── .gitkeep
@@ -223,7 +304,6 @@ Every strategy, regardless of its technical signals, receives these fundamental 
 - DCF upside/downside percentage
 - Earnings surprise history (last 4 quarters)
 - Insider buying/selling (SEC Form 4, last 90 days)
-- Analyst consensus target vs current price
 - Sensitivity matrix values at different growth/terminal assumptions
 
 For crypto, the fundamental layer uses (via CoinGecko, Dune Analytics, DefiLlama):
@@ -277,19 +357,44 @@ The `evolution.md` file (equivalent to autoresearch's program.md) tells the LLM:
 - What experiments to try (combine indicators from winners, try new timeframes)
 - What NOT to do (never exceed risk limits per track)
 
-### 6. Quant Engine Integration
+### 6. Quant Engine — Mathematical Foundations
 
-Monte Carlo and other quant techniques are NOT separate modules — they're integrated:
+The quant engine implements production-grade numerical methods. These are not academic exercises — they directly drive trading decisions.
 
-- **DCF + Monte Carlo**: Instead of one fair value, dcf_model.py runs 10,000 simulations with randomized growth rates and margins. Output: probability distribution of fair value. This feeds directly into fundamental_filters.dcf_upside_min.
+**Monte Carlo + Variance Reduction (monte_carlo.py)**
+The DCF model already uses basic MC. The quant engine upgrades this with three stacking techniques:
+- Antithetic variates: for every Z, also evaluate -Z. Free 50-75% variance reduction on monotone payoffs. Zero extra cost.
+- Control variates: if a closed-form approximation exists (e.g. Black-Scholes for options), use it as a baseline: θ_CV = θ_MC - c*(f_MC - f_exact). Corrects systematic bias.
+- Stratified sampling: partition the probability space into J strata via quantiles, sample within each, combine with weights. Neyman allocation (n_j ∝ ω_j * σ_j) oversamples high-variance strata.
+Stacking all three: 100-500x variance reduction over crude MC. This is table stakes for production, not optional.
 
-- **Copula models**: When the risk agent checks a proposed trade, it computes tail dependence between the new position and existing portfolio using a Student-t copula. If adding MSFT to a portfolio already holding AAPL and GOOG would create >0.3 tail dependence, the trade is rejected or position sized down.
+**Importance Sampling (importance_sampling.py)**
+For tail risk contracts (P(crash > 20%) ≈ 0.003), crude MC gives 0 or 1 hits in 100k samples — useless.
+Exponential tilting replaces the original measure with one centered on the rare event, then corrects via likelihood ratio. Choose tilt parameter γ so the rare threshold becomes ~1 std dev away.
+Result: 100 IS samples can beat 1,000,000 crude samples. Variance reduction of 100-10,000x on extreme events.
 
-- **Importance sampling**: Used in the backtester to estimate tail risk (probability of >20% drawdown) without needing millions of samples.
+**Particle Filter (particle_filter.py)**
+Bootstrap filter for real-time Bayesian updating. State evolves via logit random walk (bounded probabilities), observations are noisy readings.
+Algorithm: propagate particles → reweight by likelihood → normalize → resample if ESS < N/2.
+Systematic resampling (lower variance than multinomial). Smooths noisy signals — when price spikes on a single trade, the filter tempers the update.
 
-- **Particle filter**: Used by the strategy agent when processing real-time data. When earnings drop, the filter smoothly updates the probability estimate instead of jerking to the new price.
+**Copula Models (copula_models.py)**
+Sklar's theorem: any joint distribution F(x₁,...,xₙ) = C(F₁(x₁),...,Fₙ(xₙ)) where C is the copula.
+- Gaussian copula: tail dependence λ = 0. Catastrophically wrong for correlated assets in crisis. Baseline only.
+- Student-t copula: symmetric tail dependence. With ν=4, ρ=0.6 → λ ≈ 0.18 (18% probability of extreme co-movement). This is 2-5x higher than Gaussian predicts.
+- Clayton copula: lower tail dependence only (crash correlation). λ_L = 2^(-1/θ).
+Risk agent uses t-copula to gate trades. If adding a position creates >0.3 tail dependence with existing portfolio, reject or size down.
 
-- **Brier score**: Tracked for every strategy's predictions in the trade log. The evolution engine uses this as one of its scoring metrics.
+**Risk Metrics (risk_metrics.py)**
+- VaR: parametric (assumes distribution), historical (empirical quantile), Monte Carlo (simulated)
+- Expected Shortfall (CVaR): average loss beyond VaR — better for fat tails
+- EVT: fit Generalized Pareto to tail exceedances for extreme quantile estimation
+- Max drawdown, Sharpe, Sortino, Calmar
+
+**Brier Score (brier_score.py)**
+BS = mean((predicted - actual)²). Measures calibration quality.
+Below 0.20 = good. Below 0.10 = excellent. Best election forecasters achieve 0.06-0.12.
+Tracked per-strategy, used by evolution engine to rank and kill poorly calibrated strategies.
 
 ### 7. Technical Indicator Implementation Notes
 
@@ -323,35 +428,21 @@ TELEGRAM_BOT_TOKEN=xxx         # optional — pipeline failure alerts
 TELEGRAM_CHAT_ID=xxx           # optional
 ```
 
-## Build Order
-
-Build modules in this order. Each module should be testable independently before moving on.
-
-1. **Data layer** (src/data/) — db.py, symbols.py, resilience.py, validators.py, market_data.py, fundamentals.py, sec_filings.py, regime_detector.py
-2. **Analysis engine** (src/analysis/) — ratio_analysis.py, dcf_model.py, sensitivity.py
-3. **Indicator library** (src/indicators/) — start with trend.py, momentum.py, volatility.py
-4. **Broker layer** (src/brokers/) — base.py, paper_broker.py, alpaca_broker.py
-5. **Strategy framework** (src/strategies/) — base_strategy.py, strategy_loader.py, backtest.py
-6. **Quant engine** (src/quant/) — monte_carlo.py, risk_metrics.py, brier_score.py
-7. **Agent orchestrator** (src/agents/) — orchestrator.py and all agents
-8. **Evolution engine** (src/evolution/) — evolution_engine.py, strategy_mutator.py
-9. **Advanced indicators** (src/indicators/structure.py) — FVG, order blocks, BOS/CHoCH
-10. **Advanced quant** (src/quant/) — copula_models.py, particle_filter.py, importance_sampling.py
-11. **Dashboard** (src/dashboard/) — FastAPI app with analysis + trading views
-
 ## Testing
 
 Run: `python -m pytest tests/ -v`
 
-173 tests passing across 9 test files. Every module has tests. Key patterns:
+269 tests passing across 15 test files. Every module has tests. Key patterns:
 - **asyncpg pool mocking**: use `_mock_pool()` helper — `MagicMock` for pool, `AsyncMock` for context manager and connection
 - **external API mocking**: patch httpx.AsyncClient for alpaca, patch yfinance.Ticker for yfinance, patch edgartools for SEC
 - **data validation**: test both valid and invalid inputs, verify graceful handling of edge cases
+- **numpy seeded RNG**: use `np.random.default_rng(42)` for deterministic MC tests
+- Analysis tests: verify DCF math, scoring monotonicity, sensitivity grid shape
 - Broker tests: use PaperBroker to verify order flow without real API calls
 - Strategy tests: use known historical data with known outcomes
-- Analysis tests: verify DCF math against manually calculated values
 - Indicator tests: verify against known indicator values from TradingView
 - Backtest tests: verify P&L calculation, drawdown calculation, Sharpe calculation
+- Quant tests: verify variance reduction ratios, copula tail dependence, particle filter convergence
 - Evolution tests: verify mutation produces valid strategy configs
 
 ## Dependencies
@@ -379,7 +470,7 @@ groq>=0.11.0               # Groq free tier (analyst summaries)
 # Technical analysis
 pandas-ta>=0.3.14          # Technical indicators (pure Python, no TA-Lib needed)
 
-# Dashboard (phase 2)
+# Dashboard (phase 9)
 fastapi>=0.100.0
 uvicorn>=0.22.0
 jinja2>=3.1.0
@@ -397,3 +488,5 @@ pytest-asyncio>=0.21.0
 - Logging with structured output (JSON format for machine parsing)
 - Every function has a docstring explaining what it does, its inputs, and outputs
 - No hardcoded values — everything configurable via .env or config files
+- Comments: lowercase, concise, `/` prefix
+- Commits: 1-2 lines lowercase, no prefixes (no feat:, fix:, docs:, chore:), just say what changed
