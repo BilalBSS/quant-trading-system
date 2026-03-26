@@ -13,8 +13,8 @@ Self-improving agentic trading system for US stocks (via Alpaca, commission-free
 - **Phase 1** (foundation): COMPLETE — db, symbols, resilience, validators, migrations
 - **Phase 2** (data layer + regime detection): COMPLETE — market_data, fundamentals, sec_filings, regime_detector, backfill script
 - **Phase 3** (analysis engine): COMPLETE — ratio_analysis, dcf_model, sensitivity, earnings_signals, insider_activity, ai_summary
-- **Phase 4** (indicators + broker layer): NOT STARTED
-- **269 tests passing** (98 Phase 1 + 75 Phase 2 + 96 Phase 3)
+- **Phase 4** (indicators + broker layer): COMPLETE — trend, momentum, volatility, volume indicators + paper_broker, alpaca_broker, broker_factory
+- **366 tests passing** (98 Phase 1 + 75 Phase 2 + 96 Phase 3 + 97 Phase 4)
 
 ## Phases
 
@@ -27,7 +27,7 @@ market_data.py, fundamentals.py, sec_filings.py, regime_detector.py, scripts/bac
 ### Phase 3: Analysis Engine [COMPLETE]
 ratio_analysis.py, dcf_model.py, sensitivity.py, earnings_signals.py, insider_activity.py, ai_summary.py
 
-### Phase 4: Indicators + Broker Layer
+### Phase 4: Indicators + Broker Layer [COMPLETE]
 **Technical indicators** (src/indicators/):
 - trend.py — SMA, EMA, MACD, ADX, Supertrend
 - momentum.py — RSI, Stochastic, CCI, Williams %R, ROC
@@ -133,20 +133,22 @@ quant-trading-system/
 │   │   ├── earnings_signals.py  # [BUILT] earnings surprise detection, beat streaks, signal scoring
 │   │   ├── insider_activity.py  # [BUILT] insider buy/sell aggregation, cluster detection, title weighting
 │   │   └── ai_summary.py       # [BUILT] Groq free tier summary with structured fallback
-│   ├── indicators/              # [Phase 4] technical indicator library
-│   │   ├── trend.py             # SMA, EMA, MACD, ADX, Supertrend
-│   │   ├── momentum.py          # RSI, Stochastic, CCI, Williams %R, ROC
-│   │   ├── volatility.py        # Bollinger Bands, ATR, Keltner Channel
-│   │   ├── volume.py            # OBV, VWAP, Volume Profile, MFI
+│   ├── indicators/              # technical indicator library
+│   │   ├── __init__.py
+│   │   ├── trend.py             # [BUILT] SMA, EMA, MACD, ADX, Supertrend
+│   │   ├── momentum.py          # [BUILT] RSI, Stochastic, CCI, Williams %R, ROC
+│   │   ├── volatility.py        # [BUILT] Bollinger Bands, ATR, Keltner Channel
+│   │   ├── volume.py            # [BUILT] OBV, VWAP, Volume Profile, MFI
 │   │   ├── structure.py         # [Phase 8] Fair Value Gaps, Order Blocks, Structure Breaks
 │   │   ├── support_resistance.py # [Phase 8] Pivot points, Fibonacci levels, S/R zones
 │   │   └── crypto_specific.py   # [Phase 8] Funding rate, open interest, exchange flows, NVT
-│   ├── brokers/                 # [Phase 4] modular broker layer — swappable
-│   │   ├── base.py              # abstract BrokerInterface
-│   │   ├── alpaca_broker.py     # Alpaca implementation (stocks + crypto)
+│   ├── brokers/                 # modular broker layer — swappable
+│   │   ├── __init__.py
+│   │   ├── base.py              # [BUILT] abstract BrokerInterface + Order/Position/AccountBalance dataclasses
+│   │   ├── alpaca_broker.py     # [BUILT] Alpaca REST implementation (stocks + crypto)
 │   │   ├── coinbase_broker.py   # Coinbase implementation (future, crypto)
-│   │   ├── paper_broker.py      # simulated broker for backtesting
-│   │   └── broker_factory.py    # routes symbols to correct broker
+│   │   ├── paper_broker.py      # [BUILT] simulated broker for backtesting
+│   │   └── broker_factory.py    # [BUILT] routes symbols to correct broker
 │   ├── strategies/              # [Phase 5] strategy framework
 │   │   ├── base_strategy.py     # abstract StrategyInterface
 │   │   ├── strategy_loader.py   # loads strategy configs from JSON files
@@ -174,7 +176,7 @@ quant-trading-system/
 │   └── dashboard/               # [Phase 9] web dashboard
 │       ├── app.py               # FastAPI backend serving analysis + trading data
 │       └── templates/           # HTML templates or React frontend
-├── tests/                       # test suite — 269 tests passing
+├── tests/                       # test suite — 366 tests passing
 │   ├── __init__.py
 │   ├── test_db.py               # [BUILT] 12 tests — pool init, migrations, masking
 │   ├── test_symbols.py          # [BUILT] 24 tests — symbol conversion, universes
@@ -190,6 +192,13 @@ quant-trading-system/
 │   ├── test_earnings_signals.py # [BUILT] 13 tests — surprise, streaks, fetch, pipeline
 │   ├── test_insider_activity.py # [BUILT] 17 tests — weighting, clusters, signals, db
 │   ├── test_ai_summary.py       # [BUILT] 10 tests — prompt, fallback, groq mock, errors
+│   ├── test_trend.py            # [BUILT] 14 tests — sma, ema, macd, adx, supertrend
+│   ├── test_momentum.py         # [BUILT] 13 tests — rsi, stochastic, cci, williams_r, roc
+│   ├── test_volatility.py       # [BUILT] 11 tests — bollinger, atr, keltner
+│   ├── test_volume.py           # [BUILT] 13 tests — obv, vwap, volume_profile, mfi
+│   ├── test_paper_broker.py     # [BUILT] 19 tests — orders, positions, balance, cancel, stream
+│   ├── test_alpaca_broker.py    # [BUILT] 7 tests — mocked rest api, parse_order
+│   ├── test_broker_factory.py   # [BUILT] 7 tests — paper/live mode, routing
 │   └── conftest.py              # [BUILT] shared fixtures
 ├── reports/                     # auto-generated evolution reports
 │   └── .gitkeep
@@ -432,7 +441,7 @@ TELEGRAM_CHAT_ID=xxx           # optional
 
 Run: `python -m pytest tests/ -v`
 
-269 tests passing across 15 test files. Every module has tests. Key patterns:
+366 tests passing across 22 test files. Every module has tests. Key patterns:
 - **asyncpg pool mocking**: use `_mock_pool()` helper — `MagicMock` for pool, `AsyncMock` for context manager and connection
 - **external API mocking**: patch httpx.AsyncClient for alpaca, patch yfinance.Ticker for yfinance, patch edgartools for SEC
 - **data validation**: test both valid and invalid inputs, verify graceful handling of edge cases
