@@ -489,3 +489,4 @@ pytest-asyncio>=0.21.0
 - Every function has a docstring explaining what it does, its inputs, and outputs
 - No hardcoded values — everything configurable via .env or config files
 - Comments: lowercase, concise, `/` prefix
+- Commits: 1-2 lines lowercase, no prefixes (no feat:, fix:, docs:, chore:), just say what changed
