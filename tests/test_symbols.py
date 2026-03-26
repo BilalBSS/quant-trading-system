@@ -9,6 +9,7 @@ from src.data.symbols import (
     from_alpaca,
     is_crypto,
     market_type,
+    resolve_universe,
     to_alpaca,
 )
 
@@ -84,6 +85,12 @@ class TestIsCrypto:
     def test_eur_pair(self):
         assert is_crypto("BTC-EUR") is True
 
+    def test_gbp_pair(self):
+        assert is_crypto("BTC-GBP") is True
+
+    def test_lowercase_with_slash(self):
+        assert is_crypto("btc/usd") is True
+
 
 class TestMarketType:
     def test_crypto(self):
@@ -110,3 +117,64 @@ class TestUniverseConstants:
     def test_all_crypto_in_crypto_universe(self):
         for sym in CRYPTO_UNIVERSE:
             assert is_crypto(sym), f"{sym} should be crypto"
+
+
+class TestResolveUniverse:
+    def test_all_with_available_symbols(self):
+        available = ["AAPL", "BTC-USD", "TSLA"]
+        result = resolve_universe("all", available_symbols=available)
+        assert result == available
+
+    def test_all_without_available_symbols(self):
+        result = resolve_universe("all")
+        assert result == FULL_UNIVERSE
+
+    def test_all_stocks_filters_out_crypto(self):
+        available = ["AAPL", "BTC-USD", "MSFT", "ETH-USD"]
+        result = resolve_universe("all_stocks", available_symbols=available)
+        assert result == ["AAPL", "MSFT"]
+
+    def test_all_crypto_filters_out_stocks(self):
+        available = ["AAPL", "BTC-USD", "MSFT", "ETH-USD"]
+        result = resolve_universe("all_crypto", available_symbols=available)
+        assert result == ["BTC-USD", "ETH-USD"]
+
+    def test_sp500_raises_not_implemented(self):
+        with pytest.raises(NotImplementedError):
+            resolve_universe("sp500")
+
+    def test_nasdaq100_raises_not_implemented(self):
+        with pytest.raises(NotImplementedError):
+            resolve_universe("nasdaq100")
+
+    def test_comma_separated_string(self):
+        result = resolve_universe("AAPL,MSFT,GOOG")
+        assert result == ["AAPL", "MSFT", "GOOG"]
+
+    def test_unknown_ref_treated_as_comma_separated(self):
+        result = resolve_universe("TSLA")
+        assert result == ["TSLA"]
+
+    def test_whitespace_handling_in_comma_separated(self):
+        result = resolve_universe(" AAPL , MSFT , GOOG ")
+        assert result == ["AAPL", "MSFT", "GOOG"]
+
+    def test_case_insensitive_ref(self):
+        result = resolve_universe("ALL")
+        assert result == FULL_UNIVERSE
+
+    def test_default_equity_with_available_symbols(self):
+        # / "default_equity" has a cached list (EQUITY_UNIVERSE), returns it directly
+        available = ["AAPL", "BTC-USD", "TSLA"]
+        result = resolve_universe("default_equity", available_symbols=available)
+        assert result == EQUITY_UNIVERSE
+
+    def test_crypto_returns_crypto_universe(self):
+        result = resolve_universe("crypto")
+        assert result == CRYPTO_UNIVERSE
+
+
+class TestRoundtrip:
+    def test_all_full_universe_symbols_roundtrip(self):
+        for sym in FULL_UNIVERSE:
+            assert from_alpaca(to_alpaca(sym)) == sym, f"{sym} failed roundtrip"

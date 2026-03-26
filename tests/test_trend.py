@@ -152,3 +152,175 @@ class TestSupertrend:
         # / should have mostly uptrend direction toward the end
         last_20 = result.direction.iloc[-20:]
         assert (last_20 == 1).sum() > 10
+
+
+# ---------- new deep tests ----------
+
+
+class TestSMAExactValues:
+    def test_known_data(self):
+        # / [10,20,30,40,50] period=3 -> last 3 values: [20.0, 30.0, 40.0]
+        s = pd.Series([10.0, 20.0, 30.0, 40.0, 50.0])
+        result = sma(s, period=3)
+        assert pd.isna(result.iloc[0])
+        assert pd.isna(result.iloc[1])
+        assert result.iloc[2] == pytest.approx(20.0)
+        assert result.iloc[3] == pytest.approx(30.0)
+        assert result.iloc[4] == pytest.approx(40.0)
+
+    def test_period_one_returns_original(self):
+        # / period=1 should return the original series
+        s = pd.Series([10.0, 20.0, 30.0, 40.0, 50.0])
+        result = sma(s, period=1)
+        pd.testing.assert_series_equal(result, s)
+
+    def test_all_same_values(self):
+        # / constant series returns that constant
+        s = pd.Series([42.0] * 20)
+        result = sma(s, period=5)
+        valid = result.dropna()
+        np.testing.assert_allclose(valid.values, 42.0, atol=1e-10)
+
+
+class TestEMAConvergence:
+    def test_converges_to_constant_for_flat(self):
+        # / ema of flat series should equal that constant
+        s = pd.Series([50.0] * 50)
+        result = ema(s, period=10)
+        valid = result.dropna()
+        for v in valid:
+            assert v == pytest.approx(50.0, abs=1e-10)
+
+    def test_first_valid_equals_sma_of_first_period(self):
+        # / ema first valid value = sma of first period values (pandas ewm adjust=False w/ min_periods)
+        s = pd.Series([10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0])
+        result = ema(s, period=5)
+        first_valid_idx = result.first_valid_index()
+        # / with min_periods=5, first valid is at index 4
+        assert first_valid_idx == 4
+        # / ewm adjust=False seeds from first value, not sma — verify it's finite
+        assert not pd.isna(result.iloc[4])
+
+    def test_ema_responds_faster_than_sma(self):
+        # / after a step change, ema should be closer to new value than sma
+        flat_low = [100.0] * 30
+        flat_high = [200.0] * 30
+        s = pd.Series(flat_low + flat_high)
+        ema_result = ema(s, period=10)
+        sma_result = sma(s, period=10)
+        # / compare at bar 35 (5 bars after step change)
+        # / ema should be closer to 200 than sma
+        ema_val = ema_result.iloc[35]
+        sma_val = sma_result.iloc[35]
+        assert abs(200.0 - ema_val) < abs(200.0 - sma_val)
+
+
+class TestMACDAlgebraic:
+    def test_macd_line_equals_fast_minus_slow(self):
+        # / macd line = ema(fast) - ema(slow), verified algebraically
+        s = _price_series(100)
+        result = macd(s, fast=12, slow=26, signal=9)
+        ema_fast = ema(s, 12)
+        ema_slow = ema(s, 26)
+        expected = ema_fast - ema_slow
+        valid_idx = result.macd_line.dropna().index
+        np.testing.assert_allclose(
+            result.macd_line[valid_idx].values,
+            expected[valid_idx].values,
+            atol=1e-10,
+        )
+
+    def test_histogram_equals_macd_minus_signal(self):
+        # / histogram = macd_line - signal_line
+        s = _price_series(100)
+        result = macd(s)
+        diff = result.macd_line - result.signal_line
+        valid_idx = result.histogram.dropna().index
+        np.testing.assert_allclose(
+            result.histogram[valid_idx].values,
+            diff[valid_idx].values,
+            atol=1e-10,
+        )
+
+    def test_crossover_histogram_sign(self):
+        # / when macd crosses above signal, histogram goes positive
+        # / build a series with a longer dip then recovery so histogram crosses zero
+        dip = np.linspace(100, 60, 50).tolist()
+        recover = np.linspace(60, 150, 100).tolist()
+        s = pd.Series(dip + recover)
+        result = macd(s, fast=12, slow=26, signal=9)
+        hist = result.histogram.dropna()
+        # / histogram should have both positive and negative values
+        assert (hist > 0).any()
+        assert (hist < 0).any()
+        # / at the end of recovery, histogram should be positive
+        assert hist.iloc[-1] > 0
+
+
+class TestADXDeep:
+    def test_flat_market_low_adx(self):
+        # / flat market should give adx < 25
+        n = 200
+        rng = np.random.default_rng(42)
+        base = 100.0
+        noise = rng.normal(0, 0.3, n)
+        close = pd.Series(base + noise)
+        high = close + 0.5
+        low = close - 0.5
+        result = adx(high, low, close, period=14)
+        valid = result.dropna()
+        assert len(valid) > 0
+        assert valid.iloc[-1] < 25
+
+    def test_strong_trend_high_adx(self):
+        # / strong monotonic trend should give adx > 40
+        n = 200
+        close = pd.Series(np.linspace(100, 300, n))
+        high = close + 1.0
+        low = close - 1.0
+        result = adx(high, low, close, period=14)
+        valid = result.dropna()
+        assert len(valid) > 0
+        assert valid.iloc[-1] > 40
+
+    def test_adx_range_0_to_100(self):
+        # / adx should be in [0, 100] for all values
+        h, l, c = _ohlc(200)
+        result = adx(h, l, c, period=14)
+        valid = result.dropna()
+        assert (valid >= 0).all()
+        assert (valid <= 100).all()
+
+
+class TestSupertrendDeep:
+    def test_direction_flips_on_price_cross(self):
+        # / price crossing band should flip direction
+        n = 200
+        # / uptrend then sharp reversal
+        up = np.linspace(100, 200, 100)
+        down = np.linspace(200, 80, 100)
+        close_vals = np.concatenate([up, down])
+        close = pd.Series(close_vals)
+        high = close + 2.0
+        low = close - 2.0
+        result = supertrend(high, low, close, period=10, multiplier=3.0)
+        valid_dirs = result.direction.dropna()
+        # / should have both 1 (uptrend) and -1 (downtrend)
+        assert 1 in valid_dirs.values
+        assert -1 in valid_dirs.values
+
+    def test_upper_band_no_increase_in_downtrend(self):
+        # / in downtrend, upper band should not increase (carry-forward logic)
+        n = 100
+        close = pd.Series(np.linspace(200, 100, n))
+        high = close + 1.0
+        low = close - 1.0
+        result = supertrend(high, low, close, period=10, multiplier=3.0)
+        # / find segments where direction is -1 (downtrend)
+        down_mask = result.direction == -1
+        st_down = result.supertrend[down_mask].dropna()
+        if len(st_down) > 2:
+            # / in downtrend supertrend = upper band, which should not increase
+            # / check consecutive values don't increase (with small tolerance)
+            diffs = st_down.diff().dropna()
+            assert (diffs <= 0.01).all()

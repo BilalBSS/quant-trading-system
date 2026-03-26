@@ -204,3 +204,78 @@ class TestStreamPrices:
         await broker.stream_prices(["AAPL", "FAKE"], cb)
         assert "AAPL" in received
         assert "FAKE" not in received
+
+
+# ---------- new deep tests ----------
+
+
+class TestPlaceOrderDeep:
+    @pytest.mark.asyncio
+    async def test_buy_then_sell_closes_position(self, broker):
+        # / buy then sell full qty removes from positions dict
+        await broker.place_order("AAPL", 10, "buy")
+        assert "AAPL" in broker.positions
+        await broker.place_order("AAPL", 10, "sell")
+        assert "AAPL" not in broker.positions
+
+    @pytest.mark.asyncio
+    async def test_avg_price_weighted(self, broker):
+        # / buy 100@$10 then buy 50@$12 -> avg = (1000+600)/150 = $10.67
+        broker.set_price("AAPL", 10.0)
+        await broker.place_order("AAPL", 100, "buy")
+        broker.set_price("AAPL", 12.0)
+        await broker.place_order("AAPL", 50, "buy")
+        avg = broker.positions["AAPL"]["avg_price"]
+        assert avg == pytest.approx((100 * 10.0 + 50 * 12.0) / 150.0, abs=0.01)
+
+    @pytest.mark.asyncio
+    async def test_stop_order_raises(self, broker):
+        # / stop order type raises ValueError (unsupported)
+        with pytest.raises(ValueError, match="unsupported order type"):
+            await broker.place_order("AAPL", 10, "buy", order_type="stop")
+
+    @pytest.mark.asyncio
+    async def test_limit_sell_not_fillable(self, broker):
+        # / limit sell when price < limit -> pending (not fillable)
+        await broker.place_order("AAPL", 10, "buy")
+        # / price is 150, limit sell at 200 -> price < limit -> pending
+        order = await broker.place_order("AAPL", 5, "sell", order_type="limit", limit_price=200.0)
+        assert order.status == "pending"
+
+
+class TestGetPositionsDeep:
+    @pytest.mark.asyncio
+    async def test_unrealized_pnl_positive(self, broker):
+        # / price increase -> positive pnl
+        await broker.place_order("AAPL", 10, "buy")  # at 150
+        broker.set_price("AAPL", 170.0)
+        positions = await broker.get_positions()
+        assert len(positions) == 1
+        assert positions[0].unrealized_pnl == pytest.approx((170.0 - 150.0) * 10)
+        assert positions[0].unrealized_pnl > 0
+
+    @pytest.mark.asyncio
+    async def test_unrealized_pnl_negative(self, broker):
+        # / price decrease -> negative pnl
+        await broker.place_order("AAPL", 10, "buy")  # at 150
+        broker.set_price("AAPL", 130.0)
+        positions = await broker.get_positions()
+        assert len(positions) == 1
+        assert positions[0].unrealized_pnl == pytest.approx((130.0 - 150.0) * 10)
+        assert positions[0].unrealized_pnl < 0
+
+
+class TestAccountBalanceDeep:
+    @pytest.mark.asyncio
+    async def test_equity_equals_cash_plus_positions(self, broker):
+        # / equity = cash + positions_value after multiple trades
+        await broker.place_order("AAPL", 10, "buy")   # 10 * 150 = 1500
+        await broker.place_order("MSFT", 5, "buy")    # 5 * 300 = 1500
+        broker.set_price("AAPL", 160.0)
+        broker.set_price("MSFT", 310.0)
+        balance = await broker.get_account_balance()
+        expected_pos_value = 10 * 160.0 + 5 * 310.0
+        expected_cash = 100_000.0 - (10 * 150.0) - (5 * 300.0)
+        assert balance.cash == pytest.approx(expected_cash)
+        assert balance.positions_value == pytest.approx(expected_pos_value)
+        assert balance.equity == pytest.approx(expected_cash + expected_pos_value)

@@ -209,6 +209,113 @@ class TestComputeRatioScore:
         assert result.composite_score is None
 
 
+class TestScorePeExact:
+    def test_pe15_sector30_exact(self):
+        # / pe=15, sector=30 -> ratio=0.5, score=(2.0-0.5)/1.5*100=100.0
+        score = score_pe(Decimal("15"), Decimal("30"))
+        assert score == 100.0
+
+    def test_pe30_sector30_exact(self):
+        # / pe=30, sector=30 -> ratio=1.0, score=(2.0-1.0)/1.5*100=66.7
+        score = score_pe(Decimal("30"), Decimal("30"))
+        assert score == 66.7
+
+    def test_pe10_no_sector_exact(self):
+        # / absolute scale: (50-10)/40*100=100.0
+        score = score_pe(Decimal("10"), None)
+        assert score == 100.0
+
+    def test_pe50_no_sector_exact(self):
+        # / absolute scale: (50-50)/40*100=0.0
+        score = score_pe(Decimal("50"), None)
+        assert score == 0.0
+
+    def test_zero_sector_avg_uses_absolute(self):
+        # / sector_avg=0 should fall through to absolute scale
+        score = score_pe(Decimal("10"), Decimal("0"))
+        assert score == 100.0
+
+
+class TestScorePegExact:
+    def test_peg_05_exact(self):
+        # / (3.0-0.5)/2.5*100 = 100.0
+        score = score_peg(Decimal("0.5"))
+        assert score == 100.0
+
+    def test_peg_30_exact(self):
+        # / (3.0-3.0)/2.5*100 = 0.0
+        score = score_peg(Decimal("3.0"))
+        assert score == 0.0
+
+    def test_peg_175_exact(self):
+        # / (3.0-1.75)/2.5*100 = 50.0
+        score = score_peg(Decimal("1.75"))
+        assert score == 50.0
+
+
+class TestScoreFcfMarginExact:
+    def test_fcf_030_exact(self):
+        # / (0.30+0.10)/0.40*100 = 100.0
+        score = score_fcf_margin(Decimal("0.30"))
+        assert score == 100.0
+
+    def test_fcf_neg010_exact(self):
+        # / (-0.10+0.10)/0.40*100 = 0.0
+        score = score_fcf_margin(Decimal("-0.10"))
+        assert score == 0.0
+
+    def test_fcf_010_exact(self):
+        # / (0.10+0.10)/0.40*100 = 50.0
+        score = score_fcf_margin(Decimal("0.10"))
+        assert score == 50.0
+
+
+class TestScoreDebtEquityExact:
+    def test_de_zero_exact(self):
+        # / (3.0-0)/3.0*100 = 100.0
+        score = score_debt_equity(Decimal("0"))
+        assert score == 100.0
+
+    def test_de_30_exact(self):
+        # / (3.0-3.0)/3.0*100 = 0.0
+        score = score_debt_equity(Decimal("3.0"))
+        assert score == 0.0
+
+    def test_de_15_exact(self):
+        # / (3.0-1.5)/3.0*100 = 50.0
+        score = score_debt_equity(Decimal("1.5"))
+        assert score == 50.0
+
+
+class TestComputeRatioScoreWeighted:
+    def test_composite_is_correct_weighted_avg(self):
+        # / provide all ratios, compute expected composite
+        data = {
+            "symbol": "WGT",
+            "date": date(2026, 3, 25),
+            "pe_ratio": Decimal("15"),
+            "ps_ratio": Decimal("5"),
+            "peg_ratio": Decimal("1.75"),
+            "fcf_margin": Decimal("0.10"),
+            "debt_to_equity": Decimal("1.5"),
+            "sector_pe_avg": Decimal("30"),
+            "sector_ps_avg": Decimal("10"),
+        }
+        result = compute_ratio_score(data)
+        # / pe: 100.0, ps: (2.0-0.5)/1.5*100=100.0, peg: 50.0, fcf: 50.0, de: 50.0
+        pe_s = score_pe(Decimal("15"), Decimal("30"))
+        ps_s = score_ps(Decimal("5"), Decimal("10"))
+        peg_s = score_peg(Decimal("1.75"))
+        fcf_s = score_fcf_margin(Decimal("0.10"))
+        de_s = score_debt_equity(Decimal("1.5"))
+        expected = (pe_s * 0.25 + ps_s * 0.15 + peg_s * 0.25 + fcf_s * 0.20 + de_s * 0.15)
+        assert result.composite_score == round(expected, 1)
+
+    def test_weights_sum_to_one(self):
+        from src.analysis.ratio_analysis import WEIGHTS
+        assert abs(sum(WEIGHTS.values()) - 1.0) < 1e-9
+
+
 class TestAnalyzeRatios:
     @pytest.mark.asyncio
     async def test_returns_score(self):

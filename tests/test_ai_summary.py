@@ -85,6 +85,68 @@ class TestBuildPrompt:
         assert "bull" in prompt
 
 
+class TestBuildPromptDeep:
+    def test_all_components_together(self):
+        # / all data present should produce valid prompt with all sections
+        prompt = _build_prompt(
+            "AAPL", _sample_ratio(), _sample_dcf(),
+            _sample_earnings(), _sample_insider(), regime="bull",
+        )
+        assert "AAPL" in prompt
+        assert "bull" in prompt
+        assert "74.0" in prompt     # ratio composite
+        assert "220.00" in prompt   # dcf fair value
+        assert "bullish" in prompt  # earnings signal
+        assert "0.70" in prompt     # insider net buy ratio
+        assert "Cluster" in prompt  # cluster detected
+
+    def test_none_inputs_dont_crash(self):
+        # / all None inputs should not raise
+        prompt = _build_prompt("NONE", None, None, None, None, regime=None)
+        assert "NONE" in prompt
+        assert len(prompt) > 0
+
+
+class TestBuildFallbackSummaryDeep:
+    def test_cluster_detected_adds_extra_line(self):
+        insider = InsiderSignal(
+            symbol="CLU", date=date(2026, 3, 25),
+            signal="bullish", strength=60.0,
+            net_buy_ratio=0.8, total_buys=5, total_sells=0,
+            buy_value=500000.0, sell_value=0.0,
+            cluster_detected=True, unique_buyers=5, unique_sellers=0,
+        )
+        result = _build_fallback_summary("CLU", None, None, None, insider)
+        assert "cluster" in result.summary.lower()
+
+    def test_confidence_is_average_of_strengths(self):
+        # / ratio composite=70, earnings strength=60 -> avg
+        ratio = RatioScore(symbol="AVG", date=date(2026, 3, 25), composite_score=70.0)
+        earnings = EarningsSignal(
+            symbol="AVG", date=date(2026, 3, 25),
+            signal="bullish", strength=60.0,
+            surprise_pct=0.10, consecutive_beats=2, avg_surprise_4q=0.08,
+        )
+        result = _build_fallback_summary("AVG", ratio, None, earnings, None)
+        # / total_strength = 70.0 + 60.0 = 130.0, signal_count = 2
+        # / avg_strength = 130.0 / 2 = 65.0
+        assert result.confidence == 65.0
+
+    def test_all_data_present_calculates_correctly(self):
+        result = _build_fallback_summary(
+            "FULL", _sample_ratio(), _sample_dcf(),
+            _sample_earnings(), _sample_insider(),
+        )
+        assert result.signal == "bullish"
+        assert result.confidence > 0
+        # / 4 signals present, all bullish
+        # / ratio: 74.0, dcf: min(100, 0.1579*200)=31.58, earnings: 65.0, insider: 55.0
+        # / total = 74.0 + 31.58 + 65.0 + 55.0 = 225.58
+        # / avg = 225.58 / 4 = 56.395 -> 56.4
+        expected = round((74.0 + min(100.0, abs(0.1579) * 200) + 65.0 + 55.0) / 4, 1)
+        assert result.confidence == expected
+
+
 class TestBuildFallbackSummary:
     def test_bullish_summary(self):
         result = _build_fallback_summary(
@@ -163,6 +225,44 @@ class TestGenerateSummary:
                 )
                 assert result.model_used == "llama-3.1-8b-instant"
                 assert result.signal == "bullish"
+
+    @pytest.mark.asyncio
+    async def test_bearish_in_first_50_chars(self):
+        mock_response = MagicMock()
+        mock_response.raise_for_status = lambda: None
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": "Bearish. AAPL faces headwinds from declining margins and revenue slowdown."}}],
+            "model": "llama-3.1-8b-instant",
+        }
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.__aexit__.return_value = False
+        mock_client.post.return_value = mock_response
+
+        with patch.dict("os.environ", {"GROQ_API_KEY": "test-key"}):
+            with patch("httpx.AsyncClient", return_value=mock_client):
+                result = await generate_summary("AAPL", ratio=_sample_ratio())
+                assert result.signal == "bearish"
+
+    @pytest.mark.asyncio
+    async def test_neutral_when_neither_bullish_nor_bearish(self):
+        mock_response = MagicMock()
+        mock_response.raise_for_status = lambda: None
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": "Mixed signals. AAPL has balanced fundamentals with no clear direction."}}],
+            "model": "llama-3.1-8b-instant",
+        }
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.__aexit__.return_value = False
+        mock_client.post.return_value = mock_response
+
+        with patch.dict("os.environ", {"GROQ_API_KEY": "test-key"}):
+            with patch("httpx.AsyncClient", return_value=mock_client):
+                result = await generate_summary("AAPL", ratio=_sample_ratio())
+                assert result.signal == "neutral"
 
     @pytest.mark.asyncio
     async def test_falls_back_on_api_error(self):
