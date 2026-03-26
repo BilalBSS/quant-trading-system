@@ -15,7 +15,8 @@ Self-improving agentic trading system for US stocks (via Alpaca, commission-free
 - **Phase 3** (analysis engine): COMPLETE — ratio_analysis, dcf_model, sensitivity, earnings_signals, insider_activity, ai_summary
 - **Phase 4** (indicators + broker layer): COMPLETE — trend, momentum, volatility, volume indicators + paper_broker, alpaca_broker, broker_factory
 - **Phase 5** (strategy + backtesting): COMPLETE — base_strategy, strategy_loader, strategy_pool, backtest + 10 seed configs
-- **648 tests passing** (98 Phase 1 + 75 Phase 2 + 96 Phase 3 + 97 Phase 4 + 282 Phase 5)
+- **Phase 6** (quant engine): COMPLETE — monte_carlo, importance_sampling, risk_metrics, brier_score, particle_filter, copula_models
+- **764 tests passing** (98 Phase 1 + 75 Phase 2 + 96 Phase 3 + 97 Phase 4 + 282 Phase 5 + 116 Phase 6)
 
 ## Phases
 
@@ -48,7 +49,7 @@ ratio_analysis.py, dcf_model.py, sensitivity.py, earnings_signals.py, insider_ac
 - strategy_pool.py — manages N concurrent strategies with ranking, bottom quartile detection, lifecycle tracking
 - backtest.py — backtesting engine: anti-lookahead (signal at close, fill at next open), Sharpe/Sortino/Calmar/drawdown/win rate/profit factor
 
-### Phase 6: Quant Engine
+### Phase 6: Quant Engine [COMPLETE]
 **Core Monte Carlo** (src/quant/):
 - monte_carlo.py — production MC with variance reduction (antithetic variates, control variates, stratified sampling). Antithetic: use Z and -Z pairs for free ~50-75% variance reduction. Control variate: use Black-Scholes closed-form as baseline correction. Stratified: partition via quantiles, sample within each stratum, combine with Neyman allocation. Stack all three for 100-500x reduction over crude MC.
 - importance_sampling.py — exponential tilting for tail risk estimation. Shifts the sampling distribution toward the rare region (e.g., >20% crash), then corrects with likelihood ratio. Solves the problem where crude MC gives 0/1 hits on extreme events. 100 IS samples can beat 1M crude samples.
@@ -156,13 +157,13 @@ quant-trading-system/
 │   │   ├── strategy_loader.py   # [BUILT] Pydantic-validated JSON config loader
 │   │   ├── strategy_pool.py     # [BUILT] manages N concurrent strategies with ranking
 │   │   └── backtest.py          # [BUILT] backtesting engine — anti-lookahead, full metrics
-│   ├── quant/                   # [Phase 6] quantitative engines
-│   │   ├── monte_carlo.py       # MC simulation + variance reduction (antithetic + control + stratified)
-│   │   ├── importance_sampling.py # exponential tilting for tail risk (100x-10000x variance reduction)
-│   │   ├── particle_filter.py   # Sequential Monte Carlo for real-time updating (bootstrap filter)
-│   │   ├── copula_models.py     # Gaussian, Student-t, Clayton copulas for tail dependence
-│   │   ├── risk_metrics.py      # VaR, CVaR, max drawdown, EVT-based tail estimation
-│   │   └── brier_score.py       # calibration tracking for strategy predictions
+│   ├── quant/                   # quantitative engines
+│   │   ├── monte_carlo.py       # [BUILT] MC simulation + variance reduction (antithetic + control + stratified)
+│   │   ├── importance_sampling.py # [BUILT] exponential tilting for tail risk (100x-10000x variance reduction)
+│   │   ├── particle_filter.py   # [BUILT] Sequential Monte Carlo for real-time updating (bootstrap filter)
+│   │   ├── copula_models.py     # [BUILT] Gaussian, Student-t, Clayton copulas for tail dependence
+│   │   ├── risk_metrics.py      # [BUILT] VaR, CVaR, max drawdown, EVT-based tail estimation
+│   │   └── brier_score.py       # [BUILT] calibration tracking for strategy predictions
 │   ├── agents/                  # [Phase 7] runtime agentic team
 │   │   ├── orchestrator.py      # main loop — coordinates all agents
 │   │   ├── analyst_agent.py     # runs financial analysis, scores stocks
@@ -178,7 +179,7 @@ quant-trading-system/
 │   └── dashboard/               # [Phase 9] web dashboard
 │       ├── app.py               # FastAPI backend serving analysis + trading data
 │       └── templates/           # HTML templates or React frontend
-├── tests/                       # test suite — 648 tests passing
+├── tests/                       # test suite — 764 tests passing
 │   ├── __init__.py
 │   ├── test_db.py               # [BUILT] 12 tests — pool init, migrations, masking
 │   ├── test_symbols.py          # [BUILT] 24 tests — symbol conversion, universes
@@ -205,6 +206,12 @@ quant-trading-system/
 │   ├── test_strategy_loader.py  # [BUILT] 86 tests — pydantic validation, config loading, track constraints, path safety
 │   ├── test_strategy_pool.py    # [BUILT] 69 tests — ranking, quartiles, lifecycle, composite score
 │   ├── test_backtest.py         # [BUILT] 40 tests — anti-lookahead, sharpe/sortino/drawdown, trade stats
+│   ├── test_monte_carlo.py      # [BUILT] 18 tests — antithetic, stratified, control variates, variance reduction
+│   ├── test_importance_sampling.py # [BUILT] 16 tests — exponential tilt, tail probability, ESS, optimal gamma
+│   ├── test_risk_metrics.py     # [BUILT] 22 tests — VaR, CVaR, drawdown, EVT, risk summary
+│   ├── test_brier_score.py      # [BUILT] 14 tests — brier score, calibration curve, decomposition, rolling
+│   ├── test_particle_filter.py  # [BUILT] 22 tests — init, predict, update, convergence, resampling, ESS
+│   ├── test_copula_models.py    # [BUILT] 24 tests — gaussian/t/clayton fit, tail dependence, simulation, portfolio risk
 │   └── conftest.py              # [BUILT] shared fixtures
 ├── reports/                     # auto-generated evolution reports
 │   └── .gitkeep
@@ -447,7 +454,7 @@ TELEGRAM_CHAT_ID=xxx           # optional
 
 Run: `python -m pytest tests/ -v`
 
-648 tests passing across 26 test files. Every module has tests. Key patterns:
+764 tests passing across 32 test files. Every module has tests. Key patterns:
 - **asyncpg pool mocking**: use `_mock_pool()` helper — `MagicMock` for pool, `AsyncMock` for context manager and connection
 - **external API mocking**: patch httpx.AsyncClient for alpaca, patch yfinance.Ticker for yfinance, patch edgartools for SEC
 - **data validation**: test both valid and invalid inputs, verify graceful handling of edge cases
