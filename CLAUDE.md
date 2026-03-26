@@ -14,7 +14,8 @@ Self-improving agentic trading system for US stocks (via Alpaca, commission-free
 - **Phase 2** (data layer + regime detection): COMPLETE — market_data, fundamentals, sec_filings, regime_detector, backfill script
 - **Phase 3** (analysis engine): COMPLETE — ratio_analysis, dcf_model, sensitivity, earnings_signals, insider_activity, ai_summary
 - **Phase 4** (indicators + broker layer): COMPLETE — trend, momentum, volatility, volume indicators + paper_broker, alpaca_broker, broker_factory
-- **366 tests passing** (98 Phase 1 + 75 Phase 2 + 96 Phase 3 + 97 Phase 4)
+- **Phase 5** (strategy + backtesting): COMPLETE — base_strategy, strategy_loader, strategy_pool, backtest + 10 seed configs
+- **648 tests passing** (98 Phase 1 + 75 Phase 2 + 96 Phase 3 + 97 Phase 4 + 282 Phase 5)
 
 ## Phases
 
@@ -40,12 +41,12 @@ ratio_analysis.py, dcf_model.py, sensitivity.py, earnings_signals.py, insider_ac
 - alpaca_broker.py — Alpaca REST/WebSocket (stocks + crypto)
 - broker_factory.py — routes symbols to correct broker
 
-### Phase 5: Strategy Framework + Backtesting
+### Phase 5: Strategy Framework + Backtesting [COMPLETE]
 **Strategy framework** (src/strategies/):
-- base_strategy.py — abstract StrategyInterface
-- strategy_loader.py — loads strategy configs from JSON files
-- strategy_pool.py — manages multiple concurrent strategies
-- backtest.py — backtesting engine with P&L, drawdown, Sharpe calculation
+- base_strategy.py — abstract StrategyInterface + ConfigDrivenStrategy (evaluates JSON configs against indicators + analysis)
+- strategy_loader.py — Pydantic-validated JSON config loader with track constraints (fundamental-gated vs momentum-only)
+- strategy_pool.py — manages N concurrent strategies with ranking, bottom quartile detection, lifecycle tracking
+- backtest.py — backtesting engine: anti-lookahead (signal at close, fill at next open), Sharpe/Sortino/Calmar/drawdown/win rate/profit factor
 
 ### Phase 6: Quant Engine
 **Core Monte Carlo** (src/quant/):
@@ -149,11 +150,12 @@ quant-trading-system/
 │   │   ├── coinbase_broker.py   # Coinbase implementation (future, crypto)
 │   │   ├── paper_broker.py      # [BUILT] simulated broker for backtesting
 │   │   └── broker_factory.py    # [BUILT] routes symbols to correct broker
-│   ├── strategies/              # [Phase 5] strategy framework
-│   │   ├── base_strategy.py     # abstract StrategyInterface
-│   │   ├── strategy_loader.py   # loads strategy configs from JSON files
-│   │   ├── strategy_pool.py     # manages multiple concurrent strategies
-│   │   └── backtest.py          # backtesting engine — scores strategies
+│   ├── strategies/              # strategy framework
+│   │   ├── __init__.py
+│   │   ├── base_strategy.py     # [BUILT] abstract StrategyInterface + ConfigDrivenStrategy
+│   │   ├── strategy_loader.py   # [BUILT] Pydantic-validated JSON config loader
+│   │   ├── strategy_pool.py     # [BUILT] manages N concurrent strategies with ranking
+│   │   └── backtest.py          # [BUILT] backtesting engine — anti-lookahead, full metrics
 │   ├── quant/                   # [Phase 6] quantitative engines
 │   │   ├── monte_carlo.py       # MC simulation + variance reduction (antithetic + control + stratified)
 │   │   ├── importance_sampling.py # exponential tilting for tail risk (100x-10000x variance reduction)
@@ -176,7 +178,7 @@ quant-trading-system/
 │   └── dashboard/               # [Phase 9] web dashboard
 │       ├── app.py               # FastAPI backend serving analysis + trading data
 │       └── templates/           # HTML templates or React frontend
-├── tests/                       # test suite — 366 tests passing
+├── tests/                       # test suite — 648 tests passing
 │   ├── __init__.py
 │   ├── test_db.py               # [BUILT] 12 tests — pool init, migrations, masking
 │   ├── test_symbols.py          # [BUILT] 24 tests — symbol conversion, universes
@@ -199,6 +201,10 @@ quant-trading-system/
 │   ├── test_paper_broker.py     # [BUILT] 19 tests — orders, positions, balance, cancel, stream
 │   ├── test_alpaca_broker.py    # [BUILT] 7 tests — mocked rest api, parse_order
 │   ├── test_broker_factory.py   # [BUILT] 7 tests — paper/live mode, routing
+│   ├── test_base_strategy.py    # [BUILT] 87 tests — entry/exit signals, fundamentals, position sizing, indicators
+│   ├── test_strategy_loader.py  # [BUILT] 86 tests — pydantic validation, config loading, track constraints, path safety
+│   ├── test_strategy_pool.py    # [BUILT] 69 tests — ranking, quartiles, lifecycle, composite score
+│   ├── test_backtest.py         # [BUILT] 40 tests — anti-lookahead, sharpe/sortino/drawdown, trade stats
 │   └── conftest.py              # [BUILT] shared fixtures
 ├── reports/                     # auto-generated evolution reports
 │   └── .gitkeep
@@ -253,7 +259,7 @@ Each strategy is a JSON file in configs/strategies/. The LLM evolution agent rea
   "parent_id": "strategy_base_001",
   "description": "Buy when Bollinger bands show oversold AND P/E is below sector average",
   "asset_class": "stocks",
-  "universe": ["AAPL", "MSFT", "GOOG", "AMZN", "NVDA", "META", "TSLA"],
+  "universe": "all_stocks",
 
   "fundamental_filters": {
     "pe_ratio_max": 35,
@@ -441,7 +447,7 @@ TELEGRAM_CHAT_ID=xxx           # optional
 
 Run: `python -m pytest tests/ -v`
 
-366 tests passing across 22 test files. Every module has tests. Key patterns:
+648 tests passing across 26 test files. Every module has tests. Key patterns:
 - **asyncpg pool mocking**: use `_mock_pool()` helper — `MagicMock` for pool, `AsyncMock` for context manager and connection
 - **external API mocking**: patch httpx.AsyncClient for alpaca, patch yfinance.Ticker for yfinance, patch edgartools for SEC
 - **data validation**: test both valid and invalid inputs, verify graceful handling of edge cases
