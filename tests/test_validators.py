@@ -5,6 +5,10 @@ from decimal import Decimal
 import pytest
 
 from src.data.validators import (
+    DEBT_EQUITY_BOUNDS,
+    GROWTH_BOUNDS,
+    PE_BOUNDS,
+    PRICE_BOUNDS,
     ValidationResult,
     _check_bound,
     filter_valid,
@@ -56,6 +60,18 @@ class TestCheckBound:
 
     def test_no_max_bound(self):
         r = _check_bound("price", 99999, 0, None)
+        assert r.valid is True
+
+    def test_decimal_input(self):
+        r = _check_bound("price", Decimal("50.5"), 0, 100)
+        assert r.valid is True
+
+    def test_very_large_number_at_boundary(self):
+        r = _check_bound("price", 999999, 0, 999999)
+        assert r.valid is True
+
+    def test_negative_zero(self):
+        r = _check_bound("price", -0.0, 0, 100)
         assert r.valid is True
 
 
@@ -113,6 +129,46 @@ class TestValidateMarketData:
         failures = [r for r in results if not r.valid]
         assert any(r.field == "close_range" for r in failures)
 
+    def test_all_fields_at_exact_price_min(self):
+        # / PRICE_BOUNDS min = 0.0001
+        p = float(PRICE_BOUNDS[0])
+        row = {"open": p, "high": p, "low": p, "close": p, "volume": 0}
+        results = validate_market_data(row)
+        assert all(r.valid for r in results)
+
+    def test_all_fields_at_exact_price_max(self):
+        # / PRICE_BOUNDS max = 999999
+        p = float(PRICE_BOUNDS[1])
+        row = {"open": p, "high": p, "low": p, "close": p, "volume": 0}
+        results = validate_market_data(row)
+        assert all(r.valid for r in results)
+
+    def test_close_exactly_equals_low(self):
+        row = {"open": 100, "high": 110, "low": 95, "close": 95, "volume": 1000}
+        results = validate_market_data(row)
+        assert all(r.valid for r in results)
+
+    def test_close_exactly_equals_high(self):
+        row = {"open": 100, "high": 110, "low": 95, "close": 110, "volume": 1000}
+        results = validate_market_data(row)
+        assert all(r.valid for r in results)
+
+    def test_open_equals_high_close_equals_low(self):
+        row = {"open": 110, "high": 110, "low": 95, "close": 95, "volume": 1000}
+        results = validate_market_data(row)
+        assert all(r.valid for r in results)
+
+    def test_with_decimal_values(self):
+        row = {
+            "open": Decimal("100.50"),
+            "high": Decimal("110.75"),
+            "low": Decimal("95.25"),
+            "close": Decimal("105.00"),
+            "volume": Decimal("1000000"),
+        }
+        results = validate_market_data(row)
+        assert all(r.valid for r in results)
+
 
 class TestValidateFundamentals:
     def test_valid_fundamentals(self):
@@ -159,6 +215,45 @@ class TestValidateFundamentals:
     def test_empty_row(self):
         results = validate_fundamentals({})
         assert all(r.valid for r in results)
+
+    def test_pe_at_exact_lower_boundary(self):
+        # / PE_BOUNDS = (-1000, 10000)
+        row = {"pe_ratio": -1000}
+        results = validate_fundamentals(row)
+        pe = next(r for r in results if r.field == "pe_ratio")
+        assert pe.valid is True
+
+    def test_pe_at_exact_upper_boundary(self):
+        row = {"pe_ratio": 10000}
+        results = validate_fundamentals(row)
+        pe = next(r for r in results if r.field == "pe_ratio")
+        assert pe.valid is True
+
+    def test_growth_at_lower_boundary(self):
+        # / GROWTH_BOUNDS = (-1.0, 100.0)
+        row = {"revenue_growth_1y": -1.0}
+        results = validate_fundamentals(row)
+        growth = next(r for r in results if r.field == "revenue_growth_1y")
+        assert growth.valid is True
+
+    def test_growth_at_upper_boundary(self):
+        row = {"revenue_growth_1y": 100.0}
+        results = validate_fundamentals(row)
+        growth = next(r for r in results if r.field == "revenue_growth_1y")
+        assert growth.valid is True
+
+    def test_debt_to_equity_at_zero(self):
+        # / DEBT_EQUITY_BOUNDS = (0, 1000)
+        row = {"debt_to_equity": 0}
+        results = validate_fundamentals(row)
+        de = next(r for r in results if r.field == "debt_to_equity")
+        assert de.valid is True
+
+    def test_debt_to_equity_at_upper_boundary(self):
+        row = {"debt_to_equity": 1000}
+        results = validate_fundamentals(row)
+        de = next(r for r in results if r.field == "debt_to_equity")
+        assert de.valid is True
 
 
 class TestValidateSentiment:
@@ -210,3 +305,23 @@ class TestFilterValid:
         ]
         result = filter_valid(rows, validate_market_data, "test")
         assert result == []
+
+    def test_preserves_row_ordering(self):
+        rows = [
+            {"symbol": "C", "open": 300, "high": 310, "low": 290, "close": 305, "volume": 3000},
+            {"symbol": "A", "open": 100, "high": 110, "low": 90, "close": 105, "volume": 1000},
+            {"symbol": "B", "open": 200, "high": 210, "low": 190, "close": 205, "volume": 2000},
+        ]
+        result = filter_valid(rows, validate_market_data, "test")
+        assert [r["symbol"] for r in result] == ["C", "A", "B"]
+
+    def test_mixed_valid_invalid_maintains_order(self):
+        rows = [
+            {"symbol": "A", "open": 100, "high": 110, "low": 90, "close": 105, "volume": 1000},
+            {"symbol": "BAD", "open": -1, "high": 110, "low": 95, "close": 105, "volume": 1000},
+            {"symbol": "B", "open": 200, "high": 210, "low": 190, "close": 205, "volume": 2000},
+            {"symbol": "BAD2", "open": -5, "high": 110, "low": 95, "close": 105, "volume": 1000},
+            {"symbol": "C", "open": 300, "high": 310, "low": 290, "close": 305, "volume": 3000},
+        ]
+        result = filter_valid(rows, validate_market_data, "test")
+        assert [r["symbol"] for r in result] == ["A", "B", "C"]

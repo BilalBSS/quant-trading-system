@@ -99,6 +99,117 @@ class TestComputeEarningsSignal:
         assert result.avg_surprise_4q == 0.15
 
 
+class TestComputeEarningsSignalDeep:
+    def test_streak_breaks_on_threshold_boundary(self):
+        # / exactly 5% surprise is NOT > SURPRISE_THRESHOLD, so streak breaks
+        data = {
+            "symbol": "EDGE",
+            "quarters": [
+                {"period": "Q1", "actual": 1.05, "estimate": 1.00, "surprise_pct": 0.05},
+            ],
+        }
+        result = compute_earnings_signal(data)
+        # / 0.05 is not > 0.05, so no streak and no surprise points
+        assert result.consecutive_beats == 0
+        assert result.signal == "neutral"
+
+    def test_streak_of_2_beats_then_miss(self):
+        # / 2 beats followed by a miss — streak = 2
+        data = {
+            "symbol": "STREAK",
+            "quarters": [
+                {"period": "Q1", "actual": 1.20, "estimate": 1.00, "surprise_pct": 0.20},
+                {"period": "Q2", "actual": 1.15, "estimate": 1.00, "surprise_pct": 0.15},
+                {"period": "Q3", "actual": 0.80, "estimate": 1.00, "surprise_pct": -0.20},
+            ],
+        }
+        result = compute_earnings_signal(data)
+        assert result.consecutive_beats == 2
+
+    def test_very_large_surprise_clamped(self):
+        # / 100% surprise should be clamped to 5.0 by fetch, but compute handles it
+        data = {
+            "symbol": "HUGE",
+            "quarters": [
+                {"period": "Q1", "actual": 2.00, "estimate": 1.00, "surprise_pct": 5.0},
+            ],
+        }
+        result = compute_earnings_signal(data)
+        assert result.surprise_pct == 5.0
+        # / surprise_points = min(40, 5.0/0.20*40) = min(40, 1000) = 40
+        assert result.signal == "bullish"
+
+    def test_negative_consecutive_beats(self):
+        # / consecutive misses should be negative
+        data = {
+            "symbol": "MISS",
+            "quarters": [
+                {"period": "Q1", "actual": 0.80, "estimate": 1.00, "surprise_pct": -0.20},
+                {"period": "Q2", "actual": 0.75, "estimate": 1.00, "surprise_pct": -0.25},
+            ],
+        }
+        result = compute_earnings_signal(data)
+        assert result.consecutive_beats == -2
+        assert result.consecutive_beats < 0
+
+    def test_strength_components_max(self):
+        # / max possible: surprise 40 + streak 30 + avg 30 = 100
+        data = {
+            "symbol": "MAX",
+            "quarters": [
+                {"period": "Q1", "actual": 1.50, "estimate": 1.00, "surprise_pct": 0.50},
+                {"period": "Q2", "actual": 1.40, "estimate": 1.00, "surprise_pct": 0.40},
+                {"period": "Q3", "actual": 1.30, "estimate": 1.00, "surprise_pct": 0.30},
+                {"period": "Q4", "actual": 1.20, "estimate": 1.00, "surprise_pct": 0.20},
+            ],
+        }
+        result = compute_earnings_signal(data)
+        # / surprise_points: min(40, 0.50/0.20*40)=40
+        # / consecutive=4 >= 3 -> +30
+        # / avg=0.35 > 0.05 -> min(30, 0.35/0.15*30)=min(30, 70)=30
+        # / total=100
+        assert result.strength == 100.0
+
+
+class TestFetchEarningsDeep:
+    @pytest.mark.asyncio
+    async def test_handles_empty_quarterly_earnings(self):
+        import pandas as pd
+
+        mock_earnings = pd.DataFrame(columns=["Actual", "Estimate"])
+        mock_ticker = MagicMock()
+        mock_ticker.quarterly_earnings = mock_earnings
+        mock_ticker.earnings_dates = None
+        mock_yf = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+
+        with patch.dict("sys.modules", {"yfinance": mock_yf}):
+            result = await fetch_earnings("EMPTY")
+            assert result is not None
+            assert result["quarters"] == []
+
+    @pytest.mark.asyncio
+    async def test_sorts_quarters_most_recent_first(self):
+        import pandas as pd
+
+        mock_earnings = pd.DataFrame(
+            {"Actual": [1.0, 1.5, 1.2], "Estimate": [0.9, 1.3, 1.1]},
+            index=["Q1 2025", "Q3 2025", "Q2 2025"],
+        )
+        mock_ticker = MagicMock()
+        mock_ticker.quarterly_earnings = mock_earnings
+        mock_ticker.earnings_dates = None
+        mock_yf = MagicMock()
+        mock_yf.Ticker.return_value = mock_ticker
+
+        with patch.dict("sys.modules", {"yfinance": mock_yf}):
+            result = await fetch_earnings("SORT")
+            assert result is not None
+            periods = [q["period"] for q in result["quarters"]]
+            # / should be sorted descending by period string
+            assert periods == sorted(periods, reverse=True)
+
+
 class TestFetchEarnings:
     @pytest.mark.asyncio
     async def test_returns_data(self):
