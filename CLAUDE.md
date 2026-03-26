@@ -12,8 +12,8 @@ Self-improving agentic trading system for US stocks (via Alpaca, commission-free
 
 - **Phase 1** (foundation): COMPLETE — db, symbols, resilience, validators, migrations
 - **Phase 2** (data layer + regime detection): COMPLETE — market_data, fundamentals, sec_filings, regime_detector, backfill script
-- **Phase 3** (analysis engine): NOT STARTED
-- **173 tests passing** (98 Phase 1 + 75 Phase 2)
+- **Phase 3** (analysis engine): COMPLETE — ratio_analysis, dcf_model, sensitivity, earnings_signals, insider_activity, ai_summary
+- **269 tests passing** (98 Phase 1 + 75 Phase 2 + 96 Phase 3)
 
 ## Architecture
 
@@ -57,13 +57,13 @@ quant-trading-system/
 │   │   ├── crypto_onchain.py    # Dune Analytics custom on-chain queries
 │   │   └── migrations/
 │   │       └── 001_initial.sql  # [BUILT] schema for market_data, fundamentals, trades, signals
-│   ├── analysis/                # financial analysis engine (not yet built)
-│   │   ├── dcf_model.py         # discounted cash flow with Monte Carlo simulation
-│   │   ├── ratio_analysis.py    # P/E, P/S, PEG, debt-to-equity, FCF margin
-│   │   ├── sensitivity.py       # sensitivity matrix (growth rate x terminal multiple)
-│   │   ├── earnings_signals.py  # earnings surprise, guidance, estimate revisions
-│   │   ├── insider_activity.py  # SEC Form 4 — insider buys/sells
-│   │   └── ai_summary.py       # Groq free tier — natural language analysis summary
+│   ├── analysis/                # financial analysis engine
+│   │   ├── ratio_analysis.py    # [BUILT] P/E, P/S, PEG, debt-to-equity, FCF margin scoring (0-100)
+│   │   ├── dcf_model.py         # [BUILT] DCF with Monte Carlo simulation (10k runs, p10/median/p90)
+│   │   ├── sensitivity.py       # [BUILT] growth rate x terminal multiple sensitivity grid
+│   │   ├── earnings_signals.py  # [BUILT] earnings surprise detection, beat streaks, signal scoring
+│   │   ├── insider_activity.py  # [BUILT] insider buy/sell aggregation, cluster detection, title weighting
+│   │   └── ai_summary.py       # [BUILT] Groq free tier summary with structured fallback
 │   ├── indicators/              # technical indicator library (not yet built)
 │   │   ├── trend.py             # SMA, EMA, MACD, ADX, Supertrend
 │   │   ├── momentum.py          # RSI, Stochastic, CCI, Williams %R, ROC
@@ -99,7 +99,7 @@ quant-trading-system/
 │   └── dashboard/               # web dashboard (not yet built)
 │       ├── app.py               # FastAPI backend serving analysis + trading data
 │       └── templates/           # HTML templates or React frontend
-├── tests/                       # test suite — 173 tests passing
+├── tests/                       # test suite — 269 tests passing
 │   ├── __init__.py
 │   ├── test_db.py               # [BUILT] 12 tests — pool init, migrations, masking
 │   ├── test_symbols.py          # [BUILT] 24 tests — symbol conversion, universes
@@ -109,6 +109,12 @@ quant-trading-system/
 │   ├── test_fundamentals.py     # [BUILT] 19 tests — fetch, store, sector averages
 │   ├── test_sec_filings.py      # [BUILT] 17 tests — insider trades, data quality
 │   ├── test_regime_detector.py  # [BUILT] 18 tests — classify, indicators, backfill
+│   ├── test_ratio_analysis.py   # [BUILT] 27 tests — pe/ps/peg/fcf/de scoring, composite, db
+│   ├── test_dcf_model.py        # [BUILT] 14 tests — simulation, assumptions, storage
+│   ├── test_sensitivity.py      # [BUILT] 7 tests — matrix shape, monotonicity, driver detection
+│   ├── test_earnings_signals.py # [BUILT] 13 tests — surprise, streaks, fetch, pipeline
+│   ├── test_insider_activity.py # [BUILT] 17 tests — weighting, clusters, signals, db
+│   ├── test_ai_summary.py       # [BUILT] 10 tests — prompt, fallback, groq mock, errors
 │   └── conftest.py              # [BUILT] shared fixtures
 ├── reports/                     # auto-generated evolution reports
 │   └── .gitkeep
