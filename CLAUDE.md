@@ -441,7 +441,7 @@ TELEGRAM_CHAT_ID=xxx           # optional
 
 Run: `python -m pytest tests/ -v`
 
-269 tests passing across 15 test files. Every module has tests. Key patterns:
+366 tests passing across 22 test files. Every module has tests. Key patterns:
 - **asyncpg pool mocking**: use `_mock_pool()` helper — `MagicMock` for pool, `AsyncMock` for context manager and connection
 - **external API mocking**: patch httpx.AsyncClient for alpaca, patch yfinance.Ticker for yfinance, patch edgartools for SEC
 - **data validation**: test both valid and invalid inputs, verify graceful handling of edge cases
