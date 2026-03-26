@@ -160,3 +160,76 @@ def test_rolling_brier_tracks_drift():
     early = np.nanmean(result[window:window + 20])
     late = np.nanmean(result[-20:])
     assert late > early * 3  # / worsening predictions => higher BS
+
+
+# / --- additional deep tests ---
+
+def test_brier_score_exact_computation():
+    # / [0.7, 0.3, 0.9], [1, 0, 1] -> ((0.3)^2 + (0.3)^2 + (0.1)^2)/3
+    # / = (0.09 + 0.09 + 0.01) / 3 = 0.19 / 3 = 0.063333...
+    predictions = np.array([0.7, 0.3, 0.9])
+    outcomes = np.array([1.0, 0.0, 1.0])
+    expected = ((0.7 - 1) ** 2 + (0.3 - 0) ** 2 + (0.9 - 1) ** 2) / 3
+    result = brier_score(predictions, outcomes)
+    assert abs(result - expected) < 1e-12
+    assert abs(result - 0.19 / 3) < 1e-12
+
+
+def test_decomposition_identity():
+    # / BS = reliability - resolution + uncertainty (within tolerance)
+    rng = np.random.default_rng(42)
+    predictions = rng.random(1000)
+    outcomes = (predictions + rng.normal(0, 0.3, 1000) > 0.5).astype(float)
+    result = resolution_reliability_uncertainty(predictions, outcomes, n_bins=20)
+    reconstructed = result["reliability"] - result["resolution"] + result["uncertainty"]
+    assert abs(reconstructed - result["brier_score"]) < 0.001
+
+
+def test_calibration_curve_n_bins_creates_correct_bins():
+    # / n_bins=5 should create 5 bins spanning [0, 1]
+    rng = np.random.default_rng(42)
+    predictions = rng.random(500)
+    outcomes = (rng.random(500) > 0.5).astype(float)
+    for n_bins in [3, 5, 10, 20]:
+        result = calibration_curve(predictions, outcomes, n_bins=n_bins)
+        assert len(result["bin_centers"]) == n_bins
+        assert len(result["bin_freqs"]) == n_bins
+        assert len(result["bin_counts"]) == n_bins
+        # / bin centers should be evenly spaced
+        centers = result["bin_centers"]
+        spacing = centers[1] - centers[0]
+        for i in range(1, len(centers)):
+            assert abs((centers[i] - centers[i - 1]) - spacing) < 1e-10
+
+
+def test_rolling_window_1_equals_pointwise_squared_error():
+    # / window=1 means each value is the squared error at that point
+    predictions = np.array([0.8, 0.3, 0.6, 0.9])
+    outcomes = np.array([1.0, 0.0, 1.0, 0.0])
+    result = rolling_brier(predictions, outcomes, window=1)
+    expected = (predictions - outcomes) ** 2
+    np.testing.assert_allclose(result, expected, atol=1e-12)
+
+
+def test_rolling_window_equals_data_length_returns_single_value():
+    # / window = len(data) -> only last element has a value, rest are nan
+    predictions = np.array([0.5, 0.6, 0.7, 0.8])
+    outcomes = np.array([1.0, 0.0, 1.0, 0.0])
+    n = len(predictions)
+    result = rolling_brier(predictions, outcomes, window=n)
+    # / first n-1 entries are nan
+    for i in range(n - 1):
+        assert math.isnan(result[i])
+    # / last entry is the brier score over the entire dataset
+    expected_bs = brier_score(predictions, outcomes)
+    assert abs(result[-1] - expected_bs) < 1e-12
+
+
+def test_all_predictions_0_5_gives_known_brier():
+    # / BS = mean((0.5 - o)^2) for constant 0.5 predictions
+    outcomes = np.array([1.0, 0.0, 1.0, 1.0, 0.0])
+    predictions = np.full(len(outcomes), 0.5)
+    result = brier_score(predictions, outcomes)
+    expected = np.mean((0.5 - outcomes) ** 2)  # = mean(0.25, 0.25, 0.25, 0.25, 0.25) = 0.25
+    assert abs(result - expected) < 1e-12
+    assert abs(result - 0.25) < 1e-12

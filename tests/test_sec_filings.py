@@ -48,6 +48,16 @@ class TestSafeGet:
         type(obj).name = property(lambda self: (_ for _ in ()).throw(RuntimeError))
         assert _safe_get(obj, "name", "safe") == "safe"
 
+    def test_returns_numeric_attribute_value(self):
+        obj = MagicMock()
+        obj.count = 42
+        assert _safe_get(obj, "count") == 42
+
+    def test_returns_list_attribute_value(self):
+        obj = MagicMock()
+        obj.items = [1, 2, 3]
+        assert _safe_get(obj, "items") == [1, 2, 3]
+
 
 class TestGetUserAgent:
     def test_returns_env_var_when_set(self):
@@ -139,6 +149,106 @@ class TestGetTransactions:
         # / should not crash
         txns = _get_transactions(form4)
         assert txns == []
+
+    def test_multiple_transaction_types_in_single_form4(self):
+        # / buy + sell + option_exercise all in one form4
+        buy = MagicMock()
+        buy.transaction_code = "P"
+        buy.shares = 1000
+        buy.price_per_share = 100.0
+
+        sell = MagicMock()
+        sell.transaction_code = "S"
+        sell.shares = 500
+        sell.price_per_share = 120.0
+
+        exercise = MagicMock()
+        exercise.transaction_code = "M"
+        exercise.shares = 2000
+        exercise.price_per_share = 50.0
+
+        form4 = MagicMock()
+        form4.non_derivative_transactions = [buy, sell, exercise]
+        form4.transactions = None
+        form4.derivative_transactions = None
+
+        txns = _get_transactions(form4)
+        assert len(txns) == 3
+        types = {t["type"] for t in txns}
+        assert types == {"buy", "sell", "option_exercise"}
+
+    def test_zero_shares_transaction(self):
+        # / shares=0 is falsy, so _safe_get(item, "shares", 0) or _safe_get(item, "transaction_shares", 0)
+        # / falls through to transaction_shares; set that to 0 too
+        item = MagicMock(spec=["transaction_code", "shares", "transaction_shares", "price_per_share", "transaction_price_per_share"])
+        item.transaction_code = "P"
+        item.shares = 0
+        item.transaction_shares = 0
+        item.price_per_share = 100.0
+        item.transaction_price_per_share = 0
+
+        form4 = MagicMock()
+        form4.non_derivative_transactions = [item]
+        form4.transactions = None
+        form4.derivative_transactions = None
+
+        txns = _get_transactions(form4)
+        assert len(txns) == 1
+        assert txns[0]["shares"] == 0
+
+    def test_zero_price_transaction(self):
+        # / price=0 is falsy, falls through to transaction_price_per_share
+        item = MagicMock(spec=["transaction_code", "shares", "transaction_shares", "price_per_share", "transaction_price_per_share"])
+        item.transaction_code = "M"
+        item.shares = 1000
+        item.transaction_shares = 0
+        item.price_per_share = 0
+        item.transaction_price_per_share = 0
+
+        form4 = MagicMock()
+        form4.non_derivative_transactions = [item]
+        form4.transactions = None
+        form4.derivative_transactions = None
+
+        txns = _get_transactions(form4)
+        assert len(txns) == 1
+        assert txns[0]["price"] == 0
+
+    def test_lowercase_transaction_codes(self):
+        # / lowercase p, s, m should map to buy, sell, option_exercise
+        items = []
+        for code, expected in [("p", "buy"), ("s", "sell"), ("m", "option_exercise")]:
+            item = MagicMock()
+            item.transaction_code = code
+            item.shares = 100
+            item.price_per_share = 50.0
+            items.append((item, expected))
+
+        for item, expected_type in items:
+            form4 = MagicMock()
+            form4.non_derivative_transactions = [item]
+            form4.transactions = None
+            form4.derivative_transactions = None
+
+            txns = _get_transactions(form4)
+            assert txns[0]["type"] == expected_type
+
+    def test_fallback_from_shares_to_transaction_shares(self):
+        # / when shares is None, should fall back to transaction_shares attr
+        item = MagicMock()
+        item.transaction_code = "P"
+        item.shares = None
+        item.transaction_shares = 750
+        item.price_per_share = 100.0
+
+        form4 = MagicMock()
+        form4.non_derivative_transactions = [item]
+        form4.transactions = None
+        form4.derivative_transactions = None
+
+        txns = _get_transactions(form4)
+        assert len(txns) == 1
+        assert txns[0]["shares"] == 750
 
 
 class TestFetchInsiderTrades:

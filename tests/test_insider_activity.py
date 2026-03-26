@@ -88,6 +88,60 @@ class TestDetectCluster:
         assert _detect_cluster(trades) is False
 
 
+class TestTitleWeightDeep:
+    def test_chief_technology_officer(self):
+        # / "chief technology" matched at weight 2.0
+        assert _title_weight("Chief Technology Officer") == 2.0
+
+    def test_president_not_confused_with_vp(self):
+        # / "President" should match "president" at 2.0, not "vice president"
+        assert _title_weight("President") == 2.0
+
+    def test_cto_after_director_check(self):
+        # / "director" contains "cto" substring — "Director of Technology"
+        # / should match "director" first at 1.0
+        assert _title_weight("Director of Technology") == 1.0
+
+    def test_director_matches_before_cto(self):
+        # / ordering: "director" is checked before "cto" in the list
+        assert _title_weight("director") == 1.0
+
+
+class TestDetectClusterDeep:
+    def test_cluster_exactly_3_same_day(self):
+        # / exactly 3 insiders on the same day
+        d = date(2026, 3, 15)
+        trades = [
+            {"transaction_type": "buy", "filing_date": d, "insider_name": "A"},
+            {"transaction_type": "buy", "filing_date": d, "insider_name": "B"},
+            {"transaction_type": "buy", "filing_date": d, "insider_name": "C"},
+        ]
+        assert _detect_cluster(trades) is True
+
+    def test_4_insiders_within_29_days(self):
+        # / 4 insiders spread over 29 days — within 30-day window
+        base = date(2026, 3, 1)
+        trades = [
+            {"transaction_type": "buy", "filing_date": base, "insider_name": "A"},
+            {"transaction_type": "buy", "filing_date": base + timedelta(days=10), "insider_name": "B"},
+            {"transaction_type": "buy", "filing_date": base + timedelta(days=20), "insider_name": "C"},
+            {"transaction_type": "buy", "filing_date": base + timedelta(days=29), "insider_name": "D"},
+        ]
+        assert _detect_cluster(trades) is True
+
+    def test_3_insiders_exactly_30_days_boundary(self):
+        # / 3 insiders: first on day 0, last on day 30
+        # / window check: window_start = trade_date - 30 days
+        # / for the last trade (day 30): window_start = day 0, so day 0 is included
+        base = date(2026, 3, 1)
+        trades = [
+            {"transaction_type": "buy", "filing_date": base, "insider_name": "A"},
+            {"transaction_type": "buy", "filing_date": base + timedelta(days=15), "insider_name": "B"},
+            {"transaction_type": "buy", "filing_date": base + timedelta(days=30), "insider_name": "C"},
+        ]
+        assert _detect_cluster(trades) is True
+
+
 class TestComputeInsiderSignal:
     def test_strong_buying(self):
         trades = [
@@ -162,6 +216,44 @@ class TestComputeInsiderSignal:
         # / both bullish, but same net ratio since no opposing trades
         assert ceo_result.signal == "bullish"
         assert dir_result.signal == "bullish"
+
+
+class TestComputeInsiderSignalDeep:
+    def test_net_buy_ratio_formula(self):
+        # / CEO buys 300k (weight 3.0), Director sells 100k (weight 1.0)
+        # / weighted_buy = 300000*3 = 900000, weighted_sell = 100000*1 = 100000
+        # / ratio = (900000-100000)/(900000+100000) = 800000/1000000 = 0.8
+        trades = [
+            {"transaction_type": "buy", "total_value": 300000, "insider_title": "CEO",
+             "insider_name": "Alice", "filing_date": date(2026, 3, 1)},
+            {"transaction_type": "sell", "total_value": 100000, "insider_title": "Director",
+             "insider_name": "Bob", "filing_date": date(2026, 3, 5)},
+        ]
+        result = compute_insider_signal(trades, "CALC")
+        assert result.net_buy_ratio == 0.8
+
+    def test_strength_components_add_correctly(self):
+        # / ratio_points = |ratio| * 50
+        # / cluster_bonus = 25 if cluster
+        # / activity_points = min(25, trade_count * 3)
+        # / 3 buys from different insiders within 30 days (cluster=True)
+        trades = [
+            {"transaction_type": "buy", "total_value": 100000, "insider_title": "CEO",
+             "insider_name": "A", "filing_date": date(2026, 3, 1)},
+            {"transaction_type": "buy", "total_value": 100000, "insider_title": "CFO",
+             "insider_name": "B", "filing_date": date(2026, 3, 5)},
+            {"transaction_type": "buy", "total_value": 100000, "insider_title": "Director",
+             "insider_name": "C", "filing_date": date(2026, 3, 10)},
+        ]
+        result = compute_insider_signal(trades, "STR")
+        # / net_buy_ratio = 1.0 (all buys)
+        # / ratio_points = 1.0 * 50 = 50
+        # / cluster = True -> +25
+        # / activity_points = min(25, 3*3) = 9
+        # / total = 50 + 25 + 9 = 84
+        assert result.net_buy_ratio == 1.0
+        assert result.cluster_detected is True
+        assert result.strength == 84.0
 
 
 class TestAnalyzeInsiderActivity:

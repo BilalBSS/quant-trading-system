@@ -605,3 +605,99 @@ class TestEdgeCases:
         pool.add(_make_strategy("s1"))
         # / re-added strategy has no score
         assert pool.get("s1").score is None
+
+
+# ────────────────────────────────────────────────────────────────
+# deep failure-pinpointing tests — composite score
+# ────────────────────────────────────────────────────────────────
+
+class TestCompositeScoreDeep:
+    def test_exact_formula_verification(self):
+        # / sharpe=1.5, win_rate=0.6, max_dd=-0.15, brier=0.18
+        # / score = 1.5*0.4 + 0.6*0.3 - 0.15*0.2 + (0.25-0.18)*0.1
+        # /       = 0.6 + 0.18 - 0.03 + 0.007 = 0.757
+        result = compute_composite_score(
+            sharpe=1.5, win_rate=0.6, max_drawdown=-0.15, brier=0.18,
+        )
+        expected = 1.5 * 0.4 + 0.6 * 0.3 - 0.15 * 0.2 + (0.25 - 0.18) * 0.1
+        assert expected == pytest.approx(0.757)
+        assert result == pytest.approx(expected)
+
+    def test_negative_sharpe_penalizes(self):
+        # / negative sharpe should produce lower score
+        positive = compute_composite_score(sharpe=1.0, win_rate=0.5, max_drawdown=0.1)
+        negative = compute_composite_score(sharpe=-1.0, win_rate=0.5, max_drawdown=0.1)
+        assert negative < positive
+        # / verify exact: -1.0*0.4 + 0.5*0.3 - 0.1*0.2 = -0.4+0.15-0.02 = -0.27
+        assert negative == pytest.approx(-1.0 * 0.4 + 0.5 * 0.3 - 0.1 * 0.2)
+
+    def test_high_drawdown_penalizes(self):
+        # / higher drawdown should reduce score
+        low_dd = compute_composite_score(sharpe=1.0, win_rate=0.5, max_drawdown=0.05)
+        high_dd = compute_composite_score(sharpe=1.0, win_rate=0.5, max_drawdown=0.50)
+        assert high_dd < low_dd
+
+    def test_weights_sum_check(self):
+        # / weights: 0.4 + 0.3 + 0.2 + 0.1 = 1.0
+        assert 0.4 + 0.3 + 0.2 + 0.1 == pytest.approx(1.0)
+
+
+# ────────────────────────────────────────────────────────────────
+# deep failure-pinpointing tests — bottom quartile
+# ────────────────────────────────────────────────────────────────
+
+class TestBottomQuartileDeep:
+    def test_exactly_4_strategies_returns_1(self):
+        # / 4 // 4 = 1, max(1, 1) = 1
+        pool = _pool_with_n(4)
+        bottom = pool.bottom_quartile()
+        assert len(bottom) == 1
+
+    def test_5_strategies_returns_1(self):
+        # / 5 // 4 = 1, max(1, 1) = 1
+        pool = _pool_with_n(5)
+        bottom = pool.bottom_quartile()
+        assert len(bottom) == 1
+        # / should be the worst scorer (s0 has sharpe=0.0)
+        assert bottom[0].strategy.strategy_id == "s0"
+
+    def test_8_strategies_returns_2(self):
+        # / 8 // 4 = 2, max(1, 2) = 2
+        pool = _pool_with_n(8)
+        bottom = pool.bottom_quartile()
+        assert len(bottom) == 2
+        ids = {e.strategy.strategy_id for e in bottom}
+        assert ids == {"s0", "s1"}
+
+
+# ────────────────────────────────────────────────────────────────
+# deep failure-pinpointing tests — ranked
+# ────────────────────────────────────────────────────────────────
+
+class TestRankedDeep:
+    def test_unscored_last_with_inf(self):
+        # / unscored strategies use float("-inf") as sort key
+        pool = StrategyPool()
+        pool.add(_make_strategy("scored"))
+        pool.add(_make_strategy("unscored"))
+        # / give scored strategy a very negative composite score
+        score = _make_score("scored", sharpe=-10.0, win_rate=0.0, max_drawdown=0.5)
+        pool.update_score("scored", score)
+        ranked = pool.ranked()
+        # / even with terrible score, scored should be above unscored (-inf)
+        assert ranked[0].strategy.strategy_id == "scored"
+        assert ranked[1].strategy.strategy_id == "unscored"
+        assert ranked[1].score is None
+
+    def test_tie_handling(self):
+        # / strategies with identical scores should all appear in ranking
+        pool = StrategyPool()
+        for i in range(5):
+            sid = f"tie_{i}"
+            pool.add(_make_strategy(sid))
+            pool.update_score(sid, _make_score(sid, sharpe=1.0, win_rate=0.5, max_drawdown=0.1))
+        ranked = pool.ranked()
+        assert len(ranked) == 5
+        # / all composites should be identical
+        scores = [e.score.composite_score for e in ranked]
+        assert all(s == pytest.approx(scores[0]) for s in scores)

@@ -266,3 +266,117 @@ def test_nearest_pd_makes_positive_definite():
     np.testing.assert_allclose(np.diag(result), 1.0, atol=1e-10)
     # / should be symmetric
     np.testing.assert_allclose(result, result.T, atol=1e-12)
+
+
+# ---- additional deep tests ----
+
+def test_gaussian_copula_no_tail_dependence():
+    # / gaussian copula always has lambda_lower = lambda_upper = 0
+    result = tail_dependence_coefficient("gaussian", None)
+    assert result["lambda_lower"] == 0.0
+    assert result["lambda_upper"] == 0.0
+    # / also with a correlation matrix
+    corr = np.array([[1.0, 0.9], [0.9, 1.0]])
+    result2 = tail_dependence_coefficient("gaussian", corr)
+    assert result2["lambda_lower"] == 0.0
+    assert result2["lambda_upper"] == 0.0
+
+
+def test_student_t_tail_dependence_increases_with_lower_nu():
+    # / lower nu (heavier tails) -> higher tail dependence
+    rho = 0.5
+    corr = np.array([[1.0, rho], [rho, 1.0]])
+    td_nu30 = tail_dependence_coefficient("student_t", (30.0, corr))
+    td_nu10 = tail_dependence_coefficient("student_t", (10.0, corr))
+    td_nu4 = tail_dependence_coefficient("student_t", (4.0, corr))
+    td_nu3 = tail_dependence_coefficient("student_t", (3.0, corr))
+    assert td_nu3["lambda_lower"] > td_nu4["lambda_lower"]
+    assert td_nu4["lambda_lower"] > td_nu10["lambda_lower"]
+    assert td_nu10["lambda_lower"] > td_nu30["lambda_lower"]
+
+
+def test_clayton_theta_from_tau_formula():
+    # / theta = 2*tau/(1-tau), verify with tau=0.5 -> theta=2.0
+    rng = np.random.default_rng(42)
+    # / generate data with known positive Kendall's tau
+    # / for a large sample from gaussian copula with rho, tau ~ (2/pi)*arcsin(rho)
+    # / we need tau=0.5, so rho = sin(pi*0.5/2) = sin(pi/4) = sqrt(2)/2 ~ 0.7071
+    rho = np.sin(np.pi * 0.5 / 2)
+    u = _correlated_uniform(50_000, rho, rng)
+    theta = clayton_copula_fit(u)
+    # / theta should be near 2.0 (tau=0.5 -> theta=2*0.5/(1-0.5)=2.0)
+    assert abs(theta - 2.0) < 0.3
+
+
+def test_clayton_lambda_lower_formula():
+    # / lambda_L = 2^(-1/theta), verify with theta=2 -> 2^(-0.5) ~ 0.7071
+    theta = 2.0
+    result = tail_dependence_coefficient("clayton", theta)
+    expected = 2 ** (-1 / theta)  # = 2^(-0.5) = 0.70710678...
+    assert abs(result["lambda_lower"] - expected) < 1e-10
+    assert abs(result["lambda_lower"] - 0.7071067811865476) < 1e-10
+    assert result["lambda_upper"] == 0.0
+
+
+def test_simulate_gaussian_correct_shape():
+    rng = np.random.default_rng(42)
+    corr = np.array([[1.0, 0.3, 0.5], [0.3, 1.0, 0.4], [0.5, 0.4, 1.0]])
+    u = simulate_copula("gaussian", corr, 1000, rng=rng)
+    assert u.shape == (1000, 3)
+    assert np.all(u >= 0)
+    assert np.all(u <= 1)
+
+
+def test_simulate_student_t_correct_shape():
+    rng = np.random.default_rng(42)
+    corr = np.array([[1.0, 0.5, 0.3], [0.5, 1.0, 0.4], [0.3, 0.4, 1.0]])
+    u = simulate_copula("student_t", (5.0, corr), 800, rng=rng)
+    assert u.shape == (800, 3)
+    assert np.all(u >= 0)
+    assert np.all(u <= 1)
+
+
+def test_portfolio_tail_risk_output_keys():
+    rng = np.random.default_rng(42)
+    returns = rng.normal(0, 0.02, size=(100, 2))
+    result = portfolio_tail_risk(returns, copula_type="gaussian", n_simulations=500, rng=rng)
+    expected_keys = {"joint_extreme_probability", "tail_dependence", "n_simulations", "threshold"}
+    assert set(result.keys()) == expected_keys
+    assert isinstance(result["tail_dependence"], dict)
+    assert "lambda_lower" in result["tail_dependence"]
+    assert "lambda_upper" in result["tail_dependence"]
+
+
+def test_nearest_pd_on_identity_returns_identity():
+    # / identity matrix is already PD, should be returned unchanged
+    I = np.eye(3)
+    result = _nearest_pd(I)
+    np.testing.assert_allclose(result, I, atol=1e-10)
+
+
+def test_nearest_pd_eigenvalues_positive():
+    # / all eigenvalues must be positive (allow floating-point noise near zero)
+    A = np.array([
+        [1.0, 0.95, 0.95],
+        [0.95, 1.0, 0.95],
+        [0.95, 0.95, 1.0],
+    ])
+    # / perturb to make it problematic
+    A[0, 2] = 1.2
+    A[2, 0] = 1.2
+    result = _nearest_pd(A)
+    eigvals = np.linalg.eigvalsh(result)
+    # / eigenvalues should be non-negative (tiny negatives from float rounding are ok)
+    assert np.all(eigvals > -1e-10), f"negative eigenvalue found: {eigvals}"
+    # / at least two eigenvalues should be substantially positive
+    assert np.sum(eigvals > 1e-6) >= 2, f"too few positive eigenvalues: {eigvals}"
+
+
+def test_gaussian_fit_recovers_correlation():
+    # / generate data with known rho=0.6, check fitted rho within 0.1
+    rng = np.random.default_rng(42)
+    rho = 0.6
+    u = _correlated_uniform(5000, rho, rng)
+    corr = gaussian_copula_fit(u)
+    fitted_rho = corr[0, 1]
+    assert abs(fitted_rho - rho) < 0.1, f"expected rho~{rho}, got {fitted_rho}"

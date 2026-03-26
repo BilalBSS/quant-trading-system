@@ -141,6 +141,136 @@ class TestComputeDcf:
         assert result.confidence == "high"
 
 
+class TestRunDcfSimulationDeep:
+    def test_deterministic_with_seed_exact_median(self):
+        # / same seed must produce same median every time
+        rng = np.random.default_rng(99)
+        assumptions = DCFAssumptions(
+            revenue=1000.0, fcf_margin=0.20, revenue_growth=0.10,
+            shares_outstanding=100.0,
+        )
+        values = run_dcf_simulation(assumptions, num_simulations=5000, rng=rng)
+        median1 = float(np.median(values))
+
+        rng2 = np.random.default_rng(99)
+        values2 = run_dcf_simulation(assumptions, num_simulations=5000, rng=rng2)
+        median2 = float(np.median(values2))
+
+        assert median1 == median2
+
+    def test_negative_revenue_returns_zeros(self):
+        # / revenue <= 0 should produce zeros
+        assumptions = DCFAssumptions(
+            revenue=-500.0, fcf_margin=0.20, revenue_growth=0.10,
+            shares_outstanding=1.0,
+        )
+        values = run_dcf_simulation(assumptions, 100)
+        assert all(v == 0.0 for v in values)
+
+    def test_growth_clamping(self):
+        # / extreme growth_std should be clamped to [-0.50, 1.0]
+        rng = np.random.default_rng(42)
+        assumptions = DCFAssumptions(
+            revenue=1000.0, fcf_margin=0.20, revenue_growth=0.0,
+            growth_std=10.0, shares_outstanding=1.0,
+        )
+        values = run_dcf_simulation(assumptions, 500, rng)
+        # / should not go negative or produce nans from extreme growth
+        assert all(v >= 0 for v in values)
+        assert not any(np.isnan(v) for v in values)
+
+    def test_margin_clamping(self):
+        # / extreme margin_std should be clamped to [-0.5, 0.8]
+        rng = np.random.default_rng(42)
+        assumptions = DCFAssumptions(
+            revenue=1000.0, fcf_margin=0.50, revenue_growth=0.10,
+            margin_std=10.0, shares_outstanding=1.0,
+        )
+        values = run_dcf_simulation(assumptions, 500, rng)
+        assert all(v >= 0 for v in values)
+        assert not any(np.isnan(v) for v in values)
+
+    def test_terminal_multiple_clamping(self):
+        # / terminal_multiple_std=100 should be clamped to [3.0, 50.0]
+        rng = np.random.default_rng(42)
+        assumptions = DCFAssumptions(
+            revenue=1000.0, fcf_margin=0.20, revenue_growth=0.10,
+            terminal_multiple=15.0, terminal_multiple_std=100.0,
+            shares_outstanding=1.0,
+        )
+        values = run_dcf_simulation(assumptions, 500, rng)
+        assert all(v >= 0 for v in values)
+        assert not any(np.isnan(v) for v in values)
+
+    def test_more_shares_reduces_per_share(self):
+        # / doubling shares outstanding should halve per-share value
+        rng1 = np.random.default_rng(42)
+        base = DCFAssumptions(
+            revenue=1000.0, fcf_margin=0.20, revenue_growth=0.10,
+            shares_outstanding=100.0, growth_std=0.001, margin_std=0.001,
+            terminal_multiple_std=0.01,
+        )
+        rng2 = np.random.default_rng(42)
+        double = DCFAssumptions(
+            revenue=1000.0, fcf_margin=0.20, revenue_growth=0.10,
+            shares_outstanding=200.0, growth_std=0.001, margin_std=0.001,
+            terminal_multiple_std=0.01,
+        )
+        v1 = run_dcf_simulation(base, 500, rng1)
+        v2 = run_dcf_simulation(double, 500, rng2)
+        ratio = float(np.median(v1)) / float(np.median(v2))
+        assert abs(ratio - 2.0) < 0.05
+
+    def test_higher_discount_rate_lower_pv(self):
+        # / higher discount rate should produce lower present value
+        rng1 = np.random.default_rng(42)
+        low_rate = DCFAssumptions(
+            revenue=1000.0, fcf_margin=0.20, revenue_growth=0.10,
+            discount_rate=0.05, shares_outstanding=1.0, growth_std=0.01,
+        )
+        rng2 = np.random.default_rng(42)
+        high_rate = DCFAssumptions(
+            revenue=1000.0, fcf_margin=0.20, revenue_growth=0.10,
+            discount_rate=0.20, shares_outstanding=1.0, growth_std=0.01,
+        )
+        v_low = run_dcf_simulation(low_rate, 500, rng1)
+        v_high = run_dcf_simulation(high_rate, 500, rng2)
+        assert np.median(v_low) > np.median(v_high)
+
+
+class TestComputeDcfDeep:
+    def test_p10_lt_median_lt_p90_strict(self):
+        # / with meaningful std, p10 < median < p90 must be strict
+        rng = np.random.default_rng(42)
+        assumptions = DCFAssumptions(
+            revenue=1000.0, fcf_margin=0.20, revenue_growth=0.10,
+            growth_std=0.10, shares_outstanding=1.0,
+        )
+        result = compute_dcf("SPREAD", 100.0, assumptions, num_simulations=5000, rng=rng)
+        assert result.fair_value_p10 < result.fair_value_median < result.fair_value_p90
+
+    def test_downside_when_overpriced(self):
+        # / current price >> fair value -> negative upside
+        rng = np.random.default_rng(42)
+        assumptions = DCFAssumptions(
+            revenue=10.0, fcf_margin=0.10, revenue_growth=0.02,
+            shares_outstanding=1.0, terminal_multiple=5.0,
+        )
+        result = compute_dcf("OVER", 10000.0, assumptions, num_simulations=500, rng=rng)
+        assert result.upside_pct < 0
+
+    def test_confidence_low_with_wide_std(self):
+        # / wide distribution -> spread > 1.0 -> "low"
+        rng = np.random.default_rng(42)
+        wide = DCFAssumptions(
+            revenue=1000.0, fcf_margin=0.20, revenue_growth=0.10,
+            growth_std=0.50, margin_std=0.30, terminal_multiple_std=15.0,
+            shares_outstanding=1.0,
+        )
+        result = compute_dcf("WIDE", 100.0, wide, num_simulations=5000, rng=rng)
+        assert result.confidence == "low"
+
+
 class TestBuildAssumptions:
     @pytest.mark.asyncio
     async def test_builds_from_db(self):
