@@ -66,6 +66,33 @@ class TestParseBar:
         result = _parse_bar("SPY", bar)
         assert result is None
 
+    def test_parses_crypto_timestamp_with_offset_suffix(self):
+        # / crypto bars may come with +00:00 instead of Z
+        bar = {"t": "2024-03-10T00:00:00+00:00", "o": 69000, "h": 70000, "l": 68000, "c": 69500, "v": 42}
+        result = _parse_bar("BTC-USD", bar)
+        assert result is not None
+        assert result["date"] == date(2024, 3, 10)
+        assert result["symbol"] == "BTC-USD"
+
+    def test_bar_with_zero_volume_defaults_to_zero(self):
+        bar = {"t": "2024-01-15T05:00:00Z", "o": 100, "h": 110, "l": 90, "c": 105, "v": 0}
+        result = _parse_bar("SPY", bar)
+        assert result["volume"] == 0
+
+    def test_bar_with_negative_price_fields_parses(self):
+        # / parse_bar does not validate prices — validation catches later
+        bar = {"t": "2024-01-15T05:00:00Z", "o": -5, "h": 110, "l": -10, "c": 105, "v": 500}
+        result = _parse_bar("SPY", bar)
+        assert result is not None
+        assert result["open"] == Decimal("-5")
+        assert result["low"] == Decimal("-10")
+
+    def test_returns_none_for_integer_timestamp(self):
+        # / non-string timestamp (e.g. unix epoch int) should return None
+        bar = {"t": 1705276800, "o": 100, "h": 110, "l": 90, "c": 105, "v": 500}
+        result = _parse_bar("SPY", bar)
+        assert result is None
+
 
 class TestFetchBarsAlpaca:
     @pytest.mark.asyncio
@@ -257,6 +284,55 @@ class TestStoreBars:
         # / first fails, second succeeds
         assert count == 1
 
+    @pytest.mark.asyncio
+    async def test_upsert_overwrites_existing_bar(self):
+        # / store_bars uses ON CONFLICT ... DO UPDATE — verify execute is called with that sql
+        bars = [
+            {"symbol": "AAPL", "date": date(2024, 1, 15),
+             "open": Decimal("150"), "high": Decimal("160"),
+             "low": Decimal("145"), "close": Decimal("155"),
+             "volume": 3000, "vwap": Decimal("152")},
+        ]
+
+        mock_conn = AsyncMock()
+        pool = _mock_pool(mock_conn)
+
+        count = await store_bars(pool, bars)
+        assert count == 1
+        # / verify the sql contains ON CONFLICT for upsert behavior
+        call_args = mock_conn.execute.call_args
+        sql = call_args[0][0]
+        assert "ON CONFLICT" in sql
+        assert "DO UPDATE" in sql
+
+    @pytest.mark.asyncio
+    async def test_mixed_valid_and_invalid_bars_counts_only_valid(self):
+        bars = [
+            # / valid bar
+            {"symbol": "AAPL", "date": date(2024, 1, 15),
+             "open": Decimal("100"), "high": Decimal("110"),
+             "low": Decimal("90"), "close": Decimal("105"),
+             "volume": 1000, "vwap": None},
+            # / invalid bar: negative open fails validation
+            {"symbol": "BAD", "date": date(2024, 1, 15),
+             "open": Decimal("-999"), "high": Decimal("110"),
+             "low": Decimal("90"), "close": Decimal("105"),
+             "volume": 1000, "vwap": None},
+            # / valid bar
+            {"symbol": "MSFT", "date": date(2024, 1, 15),
+             "open": Decimal("200"), "high": Decimal("210"),
+             "low": Decimal("190"), "close": Decimal("205"),
+             "volume": 2000, "vwap": None},
+        ]
+
+        mock_conn = AsyncMock()
+        pool = _mock_pool(mock_conn)
+
+        count = await store_bars(pool, bars)
+        # / only 2 valid bars inserted, 1 invalid skipped
+        assert count == 2
+        assert mock_conn.execute.call_count == 2
+
 
 class TestBackfill:
     @pytest.mark.asyncio
@@ -310,6 +386,39 @@ class TestBackfill:
                 results = await backfill(pool, ["AAPL", "MSFT"], years=5)
                 assert results["AAPL"] == 0
                 assert results["MSFT"] == 1
+
+    @pytest.mark.asyncio
+    async def test_incremental_backfill_uses_correct_start_date(self):
+        # / when data exists, fetch_start = max_date + 1 day
+        existing_max = date(2024, 6, 15)
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow.return_value = {"max_date": existing_max}
+        pool = _mock_pool(mock_conn)
+
+        with patch("src.data.market_data.fetch_bars", return_value=[]) as mock_fetch:
+            with patch("src.data.market_data.store_bars", return_value=0):
+                await backfill(pool, ["AAPL"], years=5)
+                # / should have been called with start = max_date + 1
+                call_args = mock_fetch.call_args
+                fetch_start = call_args[0][1]
+                assert fetch_start == existing_max + timedelta(days=1)
+
+    @pytest.mark.asyncio
+    async def test_years_parameter_affects_date_range(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow.return_value = {"max_date": None}
+        pool = _mock_pool(mock_conn)
+
+        with patch("src.data.market_data.fetch_bars", return_value=[]) as mock_fetch:
+            with patch("src.data.market_data.store_bars", return_value=0):
+                await backfill(pool, ["AAPL"], years=2)
+                call_args = mock_fetch.call_args
+                fetch_start = call_args[0][1]
+                fetch_end = call_args[0][2]
+                # / years=2 means start = today - 2*365
+                expected_start = date.today() - timedelta(days=2 * 365)
+                assert fetch_start == expected_start
+                assert fetch_end == date.today()
 
 
 class TestFetchLatestQuote:

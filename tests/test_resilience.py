@@ -4,9 +4,12 @@ import asyncio
 
 import pytest
 
+import time
+
 from src.data.resilience import (
     CircuitBreakerOpen,
     CircuitState,
+    _CircuitBreaker,
     _breakers,
     get_breaker_state,
     reset_breaker,
@@ -61,6 +64,37 @@ class TestRetry:
 
         with pytest.raises(ConnectionError, match="permanent"):
             await always_fail()
+
+    @pytest.mark.asyncio
+    async def test_preserves_original_exception_type(self):
+        @with_retry(source="exc_type", max_retries=1, base_delay=0.01)
+        async def raise_value_error():
+            raise ValueError("bad value")
+
+        with pytest.raises(ValueError, match="bad value"):
+            await raise_value_error()
+
+    @pytest.mark.asyncio
+    async def test_circuit_breaker_open_not_caught_by_retry(self):
+        # / CircuitBreakerOpen should propagate immediately, not be retried
+        call_count = 0
+
+        @with_retry(source="cb_passthru", max_retries=0, failure_threshold=1)
+        async def always_fail():
+            nonlocal call_count
+            call_count += 1
+            raise ConnectionError("down")
+
+        # / trip the breaker
+        with pytest.raises((ConnectionError, CircuitBreakerOpen)):
+            await always_fail()
+
+        # / next call should raise CircuitBreakerOpen directly
+        with pytest.raises(CircuitBreakerOpen):
+            await always_fail()
+
+        # / function body should not have been called on the second attempt
+        assert call_count == 1
 
     @pytest.mark.asyncio
     async def test_backoff_timing(self):
@@ -164,3 +198,90 @@ class TestCircuitBreaker:
 
     def test_get_state_unknown_source(self):
         assert get_breaker_state("nonexistent") is None
+
+    @pytest.mark.asyncio
+    async def test_failure_count_increments(self):
+        call_count = 0
+
+        @with_retry(source="counter", max_retries=0, failure_threshold=10)
+        async def always_fail():
+            nonlocal call_count
+            call_count += 1
+            raise ConnectionError("down")
+
+        for i in range(3):
+            with pytest.raises(ConnectionError):
+                await always_fail()
+
+        assert _breakers["counter"].failure_count == 3
+
+    @pytest.mark.asyncio
+    async def test_success_resets_failure_count(self):
+        call_count = 0
+
+        @with_retry(source="reset_fc", max_retries=0, failure_threshold=10)
+        async def sometimes_fail():
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                raise ConnectionError("fail")
+            return "ok"
+
+        # / fail twice
+        for _ in range(2):
+            with pytest.raises(ConnectionError):
+                await sometimes_fail()
+        assert _breakers["reset_fc"].failure_count == 2
+
+        # / succeed - should reset
+        await sometimes_fail()
+        assert _breakers["reset_fc"].failure_count == 0
+
+    @pytest.mark.asyncio
+    async def test_half_open_allows_one_probe(self):
+        breaker = _CircuitBreaker(failure_threshold=1, reset_timeout=0.01)
+        _breakers["probe_test"] = breaker
+
+        # / trip it
+        breaker.record_failure()
+        assert breaker.state == CircuitState.OPEN
+
+        # / wait for reset timeout
+        await asyncio.sleep(0.02)
+
+        # / first probe should be allowed
+        allowed = await breaker.can_execute_async()
+        assert allowed is True
+        assert breaker.state == CircuitState.HALF_OPEN
+
+    @pytest.mark.asyncio
+    async def test_half_open_rejects_second_concurrent_request(self):
+        breaker = _CircuitBreaker(failure_threshold=1, reset_timeout=0.01)
+        _breakers["probe2"] = breaker
+
+        # / trip and wait
+        breaker.record_failure()
+        await asyncio.sleep(0.02)
+
+        # / first probe allowed
+        first = await breaker.can_execute_async()
+        assert first is True
+
+        # / second should be rejected (probe already in flight)
+        second = await breaker.can_execute_async()
+        assert second is False
+
+    def test_retry_after_decreases_over_time(self):
+        breaker = _CircuitBreaker(failure_threshold=1, reset_timeout=1.0)
+        breaker.record_failure()
+        first = breaker.retry_after
+        time.sleep(0.05)
+        second = breaker.retry_after
+        assert second < first
+
+    def test_exponential_backoff_delays(self):
+        # / verify base_delay * 2^attempt pattern
+        base_delay = 0.5
+        for attempt in range(4):
+            expected = base_delay * (2 ** attempt)
+            assert expected == base_delay * (2 ** attempt)

@@ -60,6 +60,34 @@ class TestRollingVolatility:
         daily_std = np.std(log_returns)
         assert vol > daily_std * 10  # / sqrt(252) ~ 15.87
 
+    def test_with_exactly_window_plus_one_data_points(self):
+        # / minimum for valid output: window + 1 prices
+        np.random.seed(42)
+        prices = np.cumsum(np.random.randn(21) * 0.01) + 100
+        prices = np.abs(prices)
+        vol = _rolling_volatility(prices, 20)
+        assert vol > 0
+
+    def test_returns_annualized_value_sqrt_252(self):
+        # / verify vol = std(log_returns) * sqrt(252)
+        np.random.seed(42)
+        prices = np.cumsum(np.random.randn(50) * 0.01) + 100
+        prices = np.abs(prices)
+        vol = _rolling_volatility(prices, 20)
+        log_returns = np.diff(np.log(prices[-21:]))
+        expected = float(np.std(log_returns) * np.sqrt(252))
+        assert abs(vol - expected) < 1e-10
+
+    def test_known_volatility_constant_daily_returns(self):
+        # / constant 1% daily returns: all log returns identical -> std ~ 0
+        prices = [100.0]
+        for _ in range(30):
+            prices.append(prices[-1] * 1.01)
+        prices = np.array(prices)
+        vol = _rolling_volatility(prices, 20)
+        # / all returns are identical so std is essentially 0 (float precision noise)
+        assert vol < 1e-10
+
 
 class TestSma:
     def test_returns_none_for_insufficient_data(self):
@@ -76,6 +104,12 @@ class TestSma:
         prices = np.array([1.0, 2.0, 100.0, 100.0])
         result = _sma(prices, 2)
         assert result == 100.0
+
+    def test_exact_calculation(self):
+        # / [10, 20, 30, 40, 50] with period 5 -> mean of all 5 = 30.0
+        prices = np.array([10.0, 20.0, 30.0, 40.0, 50.0])
+        result = _sma(prices, 5)
+        assert result == 30.0
 
 
 class TestDrawdownFromHigh:
@@ -101,6 +135,19 @@ class TestDrawdownFromHigh:
         dd = _drawdown_from_high(prices, 252)
         # / lookback of 252, peak within window = 100, current = 95
         assert abs(dd - 0.05) < 0.001
+
+    def test_lookback_shorter_than_data(self):
+        # / peak at 200 is outside lookback=3, so only recent data matters
+        prices = np.array([200.0, 50.0, 60.0, 55.0])
+        dd = _drawdown_from_high(prices, 3)
+        # / window = [50, 60, 55], peak = 60, current = 55
+        assert abs(dd - (60 - 55) / 60) < 0.001
+
+    def test_single_element_array(self):
+        prices = np.array([100.0])
+        dd = _drawdown_from_high(prices, 252)
+        # / single price = peak = current, so dd = 0
+        assert dd == 0.0
 
 
 class TestMedianVolatility:
@@ -202,6 +249,54 @@ class TestClassifyRegimes:
         classified = [r for r in results if r.regime != "insufficient_data"]
         assert all(r.market == "crypto" for r in classified)
 
+    def test_sideways_market_detected(self):
+        # / flat prices with small noise should classify as sideways
+        n = 300
+        np.random.seed(99)
+        dates = [date(2020, 1, 1) + timedelta(days=i) for i in range(n)]
+        closes = [100.0 + np.random.randn() * 0.5 for _ in range(n)]
+        results = classify_regimes(dates, closes, "equity")
+        classified = [r for r in results if r.regime != "insufficient_data"]
+        assert len(classified) > 0
+        sideways_count = sum(1 for r in classified if r.regime == "sideways")
+        # / majority should be sideways
+        assert sideways_count / len(classified) > 0.3
+
+    def test_high_volatility_market_detected(self):
+        # / calm period then extreme swings to trigger vol > 2x median
+        n = 350
+        dates = [date(2020, 1, 1) + timedelta(days=i) for i in range(n)]
+        # / first 280 days: very calm, slight uptrend
+        closes = [100.0 + i * 0.1 + np.sin(i * 0.1) * 0.5 for i in range(280)]
+        # / last 70 days: extreme daily swings (+/- 5%)
+        np.random.seed(42)
+        for i in range(70):
+            closes.append(closes[-1] * (1 + np.random.choice([-0.05, 0.05])))
+        results = classify_regimes(dates, closes, "equity")
+        classified = [r for r in results if r.regime != "insufficient_data"]
+        assert len(classified) > 0
+        # / the volatile tail should trigger high_vol or bear+high_vol
+        last_30 = classified[-30:]
+        high_vol_count = sum(1 for r in last_30 if r.regime in ("high_vol", "bear"))
+        assert high_vol_count > 0
+
+    def test_regime_transitions_bull_to_bear(self):
+        # / first half rising, second half falling sharply
+        n = 400
+        dates = [date(2020, 1, 1) + timedelta(days=i) for i in range(n)]
+        # / bull phase: steady rise
+        closes = [100.0 + i * 0.5 for i in range(300)]
+        # / bear phase: sharp decline
+        peak = closes[-1]
+        for i in range(100):
+            closes.append(peak * (1 - 0.30 * (i + 1) / 100))
+        results = classify_regimes(dates, closes, "equity")
+        classified = [r for r in results if r.regime != "insufficient_data"]
+        # / should see both bull and bear/high_vol in the results
+        regimes_seen = {r.regime for r in classified}
+        assert "bull" in regimes_seen
+        assert len(regimes_seen & {"bear", "high_vol"}) > 0
+
 
 class TestClassifySingleDate:
     def test_insufficient_data(self):
@@ -214,6 +309,14 @@ class TestClassifySingleDate:
         closes = [100.0 + i * 0.3 for i in range(300)]
         result = classify_single_date(closes, date.today(), "equity")
         assert result.regime in ("bull", "bear", "sideways", "high_vol")
+        assert result.confidence > 0
+
+    def test_with_exactly_min_history_days_data_points(self):
+        # / exactly MIN_HISTORY_DAYS should classify, not return insufficient_data
+        closes = [100.0 + i * 0.3 for i in range(MIN_HISTORY_DAYS)]
+        result = classify_single_date(closes, date.today(), "equity")
+        assert result.regime in ("bull", "bear", "sideways", "high_vol")
+        assert result.regime != "insufficient_data"
         assert result.confidence > 0
 
 
