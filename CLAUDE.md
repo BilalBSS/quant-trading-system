@@ -16,7 +16,8 @@ Self-improving agentic trading system for US stocks (via Alpaca, commission-free
 - **Phase 4** (indicators + broker layer): COMPLETE — trend, momentum, volatility, volume indicators + paper_broker, alpaca_broker, broker_factory
 - **Phase 5** (strategy + backtesting): COMPLETE — base_strategy, strategy_loader, strategy_pool, backtest + 10 seed configs
 - **Phase 6** (quant engine): COMPLETE — monte_carlo, importance_sampling, risk_metrics, brier_score, particle_filter, copula_models
-- **1067 tests passing** (129 Phase 1 + 125 Phase 2 + 152 Phase 3 + 164 Phase 4 + 329 Phase 5 + 168 Phase 6)
+- **Phase 7** (agents + evolution): COMPLETE — orchestrator, analyst_agent, strategy_agent, risk_agent, executor_agent, tools + evolution_engine, strategy_mutator, report_generator, documentation
+- **1273 tests passing** (129 Phase 1 + 125 Phase 2 + 152 Phase 3 + 164 Phase 4 + 329 Phase 5 + 168 Phase 6 + 206 Phase 7)
 
 ## Phases
 
@@ -60,20 +61,20 @@ ratio_analysis.py, dcf_model.py, sensitivity.py, earnings_signals.py, insider_ac
 - particle_filter.py — Sequential Monte Carlo (bootstrap filter) for real-time probability updating. Maintains N particles as hypotheses about true state, reweights on each observation via likelihood, systematic resampling when ESS < N/2. Operates in logit space to keep probabilities bounded. Used by strategy agent to smooth noisy signals (earnings drops, price spikes) instead of jerking to raw values.
 - copula_models.py — Gaussian copula (no tail dependence — baseline only), Student-t copula (symmetric tail dependence, λ > 0 for finite ν), Clayton copula (lower tail dependence — crash correlation). Risk agent uses t-copula to check tail dependence between proposed trade and existing portfolio. If tail dependence > 0.3, reject or size down. Gaussian copula underestimates extreme co-movement by 2-5x — this is what blew up in 2008.
 
-### Phase 7: Agents + Evolution
+### Phase 7: Agents + Evolution [COMPLETE]
 **Agent orchestrator** (src/agents/):
-- orchestrator.py — main loop coordinating all agents on schedule
-- analyst_agent.py — runs analysis engine, writes to analysis_scores
-- strategy_agent.py — generates trade signals from indicators + analysis + particle filter
-- risk_agent.py — approves/rejects trades via copula-based portfolio risk check
-- executor_agent.py — places orders through broker layer
-- tools.py — MCP-style tools each agent can call
+- orchestrator.py — main loop coordinating all agents on schedule (NYSE market hours via exchange_calendars)
+- analyst_agent.py — runs analysis engine (ratio, dcf, earnings, insider, ai_summary), writes to analysis_scores
+- strategy_agent.py — generates trade signals from indicators + analysis + particle filter signal smoothing
+- risk_agent.py — approves/rejects trades via position sizing, portfolio risk limits, copula-based tail dependence check
+- executor_agent.py — places orders through broker layer, logs to trade_log
+- tools.py — shared async DB helpers for all agents (store/fetch for all pipeline tables)
 
 **Evolution engine** (src/evolution/):
-- evolution_engine.py — Karpathy autoresearch loop (read → rank → kill → mutate → backtest → score → promote → document)
-- strategy_mutator.py — LLM-powered strategy config mutation via Claude Haiku
-- report_generator.py — weekly evolution reports (markdown)
-- documentation.py — auto-updates docs after each evolution cycle
+- evolution_engine.py — Karpathy autoresearch loop (read → rank → kill → mutate → backtest → score → promote → document), parallel backtesting via asyncio.gather
+- strategy_mutator.py — Claude Haiku strategy mutation with 3-retry loop, random tweak fallback
+- report_generator.py — markdown evolution reports per generation
+- documentation.py — auto-updates CHANGELOG after each evolution cycle
 
 ### Phase 8: Advanced Indicators + Data Sources
 **Advanced indicators** (src/indicators/):
@@ -164,22 +165,22 @@ quant-trading-system/
 │   │   ├── copula_models.py     # [BUILT] Gaussian, Student-t, Clayton copulas for tail dependence
 │   │   ├── risk_metrics.py      # [BUILT] VaR, CVaR, max drawdown, EVT-based tail estimation
 │   │   └── brier_score.py       # [BUILT] calibration tracking for strategy predictions
-│   ├── agents/                  # [Phase 7] runtime agentic team
-│   │   ├── orchestrator.py      # main loop — coordinates all agents
-│   │   ├── analyst_agent.py     # runs financial analysis, scores stocks
-│   │   ├── strategy_agent.py    # generates trade signals from indicators + analysis
-│   │   ├── risk_agent.py        # approves/rejects trades, checks portfolio risk
-│   │   ├── executor_agent.py    # places orders through broker layer
-│   │   └── tools.py             # MCP-style tools each agent can call
-│   ├── evolution/               # [Phase 7] autoresearch loop
-│   │   ├── evolution_engine.py  # reads logs -> proposes mutations -> backtests -> keeps/discards
-│   │   ├── strategy_mutator.py  # LLM-powered strategy config mutation
-│   │   ├── report_generator.py  # weekly evolution reports (markdown)
-│   │   └── documentation.py     # auto-updates docs after each evolution cycle
+│   ├── agents/                  # runtime agentic team
+│   │   ├── orchestrator.py      # [BUILT] main loop — coordinates all agents on NYSE schedule
+│   │   ├── analyst_agent.py     # [BUILT] runs financial analysis pipeline, scores stocks
+│   │   ├── strategy_agent.py    # [BUILT] generates trade signals with particle filter smoothing
+│   │   ├── risk_agent.py        # [BUILT] approves/rejects trades via copula risk check
+│   │   ├── executor_agent.py    # [BUILT] places orders through broker layer
+│   │   └── tools.py             # [BUILT] shared async DB helpers for all agents
+│   ├── evolution/               # autoresearch loop
+│   │   ├── evolution_engine.py  # [BUILT] karpathy loop — read/rank/kill/mutate/backtest/score/promote
+│   │   ├── strategy_mutator.py  # [BUILT] claude haiku mutation + random tweak fallback
+│   │   ├── report_generator.py  # [BUILT] markdown evolution reports per generation
+│   │   └── documentation.py     # [BUILT] auto-updates changelog after evolution cycle
 │   └── dashboard/               # [Phase 9] web dashboard
 │       ├── app.py               # FastAPI backend serving analysis + trading data
 │       └── templates/           # HTML templates or React frontend
-├── tests/                       # test suite — 1067 tests passing
+├── tests/                       # test suite — 1273 tests passing
 │   ├── __init__.py
 │   ├── test_db.py               # [BUILT] 19 tests — pool init, migrations, masking, race conditions, env vars
 │   ├── test_symbols.py          # [BUILT] 42 tests — symbol conversion, universes, resolve_universe, roundtrip
@@ -212,6 +213,16 @@ quant-trading-system/
 │   ├── test_brier_score.py      # [BUILT] 20 tests — brier exact, decomposition identity, calibration bins, rolling window=1
 │   ├── test_particle_filter.py  # [BUILT] 33 tests — bounded particles, weight invariants, convergence, collapse recovery
 │   ├── test_copula_models.py    # [BUILT] 34 tests — gaussian λ=0, t-copula monotonicity, clayton formula, correlation recovery
+│   ├── test_tools.py            # [BUILT] 49 tests — store/fetch helpers, whitelist, serialization roundtrips
+│   ├── test_analyst_agent.py    # [BUILT] 20 tests — pipeline, partial failure, score computation, regime fetch
+│   ├── test_strategy_agent.py   # [BUILT] 21 tests — signal generation, particle filter, exit checking, threshold
+│   ├── test_risk_agent.py       # [BUILT] 22 tests — approve/reject, copula skip/trigger, portfolio risk, sizing
+│   ├── test_executor_agent.py   # [BUILT] 15 tests — order execution, double-guard, status transitions
+│   ├── test_orchestrator.py     # [BUILT] 24 tests — scheduling, market hours, startup/shutdown, error isolation
+│   ├── test_strategy_mutator.py # [BUILT] 22 tests — haiku mutation, retry, random tweak, prompt construction
+│   ├── test_evolution_engine.py # [BUILT] 15 tests — full loop, kill/mutate/backtest/score/promote
+│   ├── test_report_generator.py # [BUILT] 10 tests — markdown format, file creation, empty sections
+│   ├── test_documentation.py    # [BUILT] 8 tests — changelog insertion, content preservation
 │   └── conftest.py              # [BUILT] shared fixtures
 ├── reports/                     # auto-generated evolution reports
 │   └── .gitkeep
