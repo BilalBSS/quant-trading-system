@@ -443,7 +443,9 @@ class TestLoadConfigFile:
         path.write_text(json.dumps(raw))
         strategy = load_config_file(path)
         assert strategy.strategy_id == "test_mom_001"
-        assert strategy.config == raw
+        # / config is pydantic-normalized (includes defaults, universe coerced)
+        assert strategy.config["id"] == raw["id"]
+        assert strategy.config["name"] == raw["name"]
 
     def test_load_fundamental_gated_from_tmp(self, tmp_path):
         raw = _fundamental_gated_config()
@@ -598,10 +600,17 @@ class TestSaveConfig:
         path = save_config(raw, directory=tmp_path)
         assert path.name == "test_min_001.json"
 
-    def test_save_missing_id_uses_unknown(self, tmp_path):
+    def test_save_invalid_config_rejected(self, tmp_path):
+        # / save_config now validates before writing
         raw = {"name": "no_id"}
-        path = save_config(raw, directory=tmp_path)
-        assert path.name == "unknown.json"
+        with pytest.raises((ValueError, Exception)):
+            save_config(raw, directory=tmp_path)
+
+    def test_save_rejects_path_traversal_id(self, tmp_path):
+        raw = _minimal_config()
+        raw["id"] = "../../evil"
+        with pytest.raises(ValueError, match="alphanumeric"):
+            save_config(raw, directory=tmp_path)
 
     def test_save_then_load_config_file(self, tmp_path):
         # / full roundtrip: save raw dict -> load as ConfigDrivenStrategy
@@ -609,7 +618,9 @@ class TestSaveConfig:
         path = save_config(raw, directory=tmp_path)
         strategy = load_config_file(path)
         assert strategy.strategy_id == "test_mom_001"
-        assert strategy.config == raw
+        # / config is pydantic-normalized (e.g. universe list -> string)
+        assert strategy.config["id"] == raw["id"]
+        assert strategy.config["name"] == raw["name"]
 
     def test_save_preserves_json_formatting(self, tmp_path):
         raw = _minimal_config()

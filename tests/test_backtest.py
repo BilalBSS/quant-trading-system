@@ -497,8 +497,8 @@ class TestComputeMetricsSortino:
         expected_sortino = avg_ret / downside_std * math.sqrt(252)
         assert result.sortino_ratio == pytest.approx(expected_sortino, rel=0.01)
 
-    def test_no_negative_returns_sortino_zero(self):
-        # / all positive returns => no downside => sortino=0
+    def test_no_negative_returns_sortino_inf(self):
+        # / all positive returns => no downside => sortino=inf
         daily_returns = [0.01, 0.02, 0.005, 0.015]
         result = _compute_metrics(
             strategy_id="test", strategy_name="test",
@@ -507,7 +507,7 @@ class TestComputeMetricsSortino:
             daily_returns=daily_returns,
             trades=[],
         )
-        assert result.sortino_ratio == 0.0
+        assert result.sortino_ratio == float("inf")
 
 
 class TestComputeMetricsDrawdown:
@@ -629,7 +629,7 @@ class TestComputeMetricsProfitFactor:
 class TestComputeMetricsCalmar:
     def test_calmar_ratio_known(self):
         # / total_return_pct=10%, 252 trading days, max_dd_pct=5%
-        # / annualized = 10% * (252/252) = 10% => calmar = 10%/5% = 2.0
+        # / compound annualized = (1.10)^(252/252) - 1 = 0.10 => calmar = 0.10/0.05 = 2.0
         equity_curve = [100_000.0, 95_000.0, 110_000.0]
         daily_returns = [-0.05, 0.1579]
         result = _compute_metrics(
@@ -641,8 +641,8 @@ class TestComputeMetricsCalmar:
         )
 
         # / total_return_pct = 0.10, trading_days=2, max_dd_pct=5/100=0.05
-        # / annualized = 0.10 * (252/2) = 12.6 => calmar = 12.6 / 0.05 = 252.0
-        expected_ann = 0.10 * (252 / 2)
+        # / compound annualized = (1.10)^(252/2) - 1
+        expected_ann = (1.10) ** (252 / 2) - 1
         expected_calmar = expected_ann / 0.05
         assert result.calmar_ratio == pytest.approx(expected_calmar, rel=0.01)
 
