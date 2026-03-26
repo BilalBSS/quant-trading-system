@@ -100,6 +100,96 @@ class TestDetermineSensitivityDriver:
         assert result == "terminal_multiple"
 
 
+class TestComputeSensitivityMatrixDeep:
+    def test_single_cell_matrix(self):
+        # / 1 growth x 1 multiple -> 1x1 matrix
+        assumptions = DCFAssumptions(
+            revenue=1000.0, fcf_margin=0.20, revenue_growth=0.10,
+            shares_outstanding=1.0,
+        )
+        rng = np.random.default_rng(42)
+        values, upsides = compute_sensitivity_matrix(
+            assumptions, 100.0, [0.10], [15.0], 100, rng,
+        )
+        assert len(values) == 1
+        assert len(values[0]) == 1
+        assert len(upsides) == 1
+        assert len(upsides[0]) == 1
+        assert values[0][0] > 0
+
+    def test_negative_growth_lower_than_positive(self):
+        assumptions = DCFAssumptions(
+            revenue=1000.0, fcf_margin=0.20, revenue_growth=0.10,
+            shares_outstanding=1.0, growth_std=0.01,
+        )
+        rng = np.random.default_rng(42)
+        values, _ = compute_sensitivity_matrix(
+            assumptions, 100.0, [-0.10, 0.10], [15.0], 500, rng,
+        )
+        # / negative growth row should have lower value
+        assert values[0][0] < values[1][0]
+
+    def test_zero_current_price_no_divide_by_zero(self):
+        # / current_price=0 should not crash in upside calc
+        assumptions = DCFAssumptions(
+            revenue=1000.0, fcf_margin=0.20, revenue_growth=0.10,
+            shares_outstanding=1.0,
+        )
+        rng = np.random.default_rng(42)
+        values, upsides = compute_sensitivity_matrix(
+            assumptions, 0.0, [0.10], [15.0], 100, rng,
+        )
+        assert upsides[0][0] == 0.0
+        assert values[0][0] > 0
+
+
+class TestDetermineSensitivityDriverDeep:
+    def test_equal_sensitivity_returns_terminal_multiple(self):
+        # / equal range across rows and cols -> tie goes to terminal_multiple
+        matrix = [
+            [100.0, 200.0],
+            [200.0, 300.0],
+        ]
+        result = determine_sensitivity_driver(matrix, [0.05, 0.15], [10.0, 20.0])
+        # / growth range per col: col0=[100,200]=100, col1=[200,300]=100 avg=100
+        # / tm range per row: row0=[100,200]=100, row1=[200,300]=100 avg=100
+        # / equal -> not strictly greater -> "terminal_multiple"
+        assert result == "terminal_multiple"
+
+    def test_single_row_matrix(self):
+        # / 1 growth x 3 multiples -> growth range=0 -> terminal_multiple
+        matrix = [[50.0, 100.0, 150.0]]
+        result = determine_sensitivity_driver(matrix, [0.10], [10.0, 15.0, 20.0])
+        assert result == "terminal_multiple"
+
+    def test_single_col_matrix(self):
+        # / 3 growth x 1 multiple -> tm range=0 -> growth
+        matrix = [[50.0], [100.0], [150.0]]
+        result = determine_sensitivity_driver(matrix, [0.0, 0.10, 0.20], [15.0])
+        assert result == "growth"
+
+
+class TestAnalyzeSensitivityDeep:
+    def test_grid_size_matches_input_dimensions(self):
+        rng = np.random.default_rng(42)
+        assumptions = DCFAssumptions(
+            revenue=1000.0, fcf_margin=0.20, revenue_growth=0.10,
+            shares_outstanding=1.0,
+        )
+        growth = [0.05, 0.10]
+        multiples = [10.0, 15.0, 20.0]
+        result = analyze_sensitivity(
+            "DIM", assumptions, 150.0,
+            growth_rates=growth,
+            terminal_multiples=multiples,
+            num_simulations=50,
+            rng=rng,
+        )
+        assert result.details["grid_size"] == "2x3"
+        assert len(result.matrix) == 2
+        assert len(result.matrix[0]) == 3
+
+
 class TestAnalyzeSensitivity:
     def test_full_analysis(self):
         rng = np.random.default_rng(42)

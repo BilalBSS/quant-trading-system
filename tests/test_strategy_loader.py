@@ -783,3 +783,93 @@ class TestEdgeCases:
         config = validate_config(raw)
         assert config.metadata.backtest_sharpe == 1.42
         assert config.metadata.paper_trade_days == 14
+
+
+# / --- deep validation tests ---
+
+class TestValidationDeep:
+    def test_universe_as_list_normalized_to_string(self):
+        # / list of symbols should be joined with commas
+        raw = _minimal_config()
+        raw["universe"] = ["AAPL", "MSFT", "GOOG"]
+        config = validate_config(raw)
+        assert config.universe == "AAPL,MSFT,GOOG"
+
+    def test_universe_empty_list_defaults_to_all(self):
+        # / empty list should be rejected (not silently default to "all")
+        raw = _minimal_config()
+        raw["universe"] = []
+        with pytest.raises(ValidationError, match="universe must not be empty"):
+            validate_config(raw)
+
+    def test_max_position_pct_exactly_0_rejected(self):
+        # / 0 is not in (0, 0.10] — should be rejected by field validator
+        raw = _minimal_config()
+        raw["position_sizing"]["max_position_pct"] = 0.0
+        with pytest.raises(ValidationError, match="max_position_pct must be"):
+            validate_config(raw)
+
+    def test_max_position_pct_exactly_10_pct_allowed(self):
+        # / 0.10 is the upper bound of field validator (0, 0.10]
+        # / but model validator rejects it for momentum-only (max 4%)
+        raw = _minimal_config()
+        raw["position_sizing"]["max_position_pct"] = 0.10
+        with pytest.raises(ValidationError, match="momentum-only max position is 4%"):
+            validate_config(raw)
+
+        # / for fundamental-gated, 0.10 exceeds 8% cap
+        raw_fund = _fundamental_gated_config()
+        raw_fund["position_sizing"]["max_position_pct"] = 0.10
+        with pytest.raises(ValidationError, match="fundamental-gated max position is 8%"):
+            validate_config(raw_fund)
+
+    def test_fundamental_gated_with_1_signal_rejected(self):
+        # / fundamental-gated needs >= 2 signals
+        raw = _fundamental_gated_config()
+        raw["entry_conditions"]["signals"] = [_base_signal()]
+        with pytest.raises(ValidationError, match="at least 2 technical signals"):
+            validate_config(raw)
+
+    def test_momentum_only_with_0_signals_rejected(self):
+        # / momentum-only needs >= 1 signal, but pydantic catches 0 signals first
+        raw = _momentum_only_config()
+        raw["entry_conditions"]["signals"] = []
+        with pytest.raises(ValidationError, match="at least one entry signal"):
+            validate_config(raw)
+
+    def test_more_than_8_signals_rejected(self):
+        # / max 8 entry conditions to prevent overfitting
+        raw = _minimal_config()
+        raw["entry_conditions"]["signals"] = [_base_signal() for _ in range(9)]
+        with pytest.raises(ValidationError, match="max 8 entry conditions"):
+            validate_config(raw)
+
+    def test_fundamental_gated_max_pct_above_8_rejected(self):
+        # / fundamental-gated strategies capped at 8%
+        raw = _fundamental_gated_config()
+        raw["position_sizing"]["max_position_pct"] = 0.09
+        with pytest.raises(ValidationError, match="fundamental-gated max position is 8%"):
+            validate_config(raw)
+
+    def test_momentum_only_max_pct_above_4_rejected(self):
+        # / momentum-only strategies capped at 4%
+        raw = _momentum_only_config()
+        raw["position_sizing"]["max_position_pct"] = 0.05
+        with pytest.raises(ValidationError, match="momentum-only max position is 4%"):
+            validate_config(raw)
+
+
+# / --- deep save_config tests ---
+
+class TestSaveConfigDeep:
+    def test_id_with_spaces_rejected(self, tmp_path):
+        raw = _minimal_config()
+        raw["id"] = "test strategy"
+        with pytest.raises(ValueError, match="alphanumeric"):
+            save_config(raw, directory=tmp_path)
+
+    def test_id_with_slashes_rejected(self, tmp_path):
+        raw = _minimal_config()
+        raw["id"] = "test/strategy"
+        with pytest.raises(ValueError, match="alphanumeric"):
+            save_config(raw, directory=tmp_path)

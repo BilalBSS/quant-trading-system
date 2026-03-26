@@ -146,3 +146,73 @@ def test_effective_sample_size_degenerate_weights():
 def test_effective_sample_size_raises_for_empty():
     with pytest.raises(ValueError, match="must not be empty"):
         effective_sample_size(np.array([]))
+
+
+# --- additional deep tests ---
+
+
+def test_exponential_tilt_zero_gamma_samples_from_original():
+    # / gamma=0 means tilted_mu = mu, so samples come from the original distribution
+    rng = np.random.default_rng(42)
+    mu, sigma = 5.0, 2.0
+    dist = stats.norm(loc=mu, scale=sigma)
+    samples, weights = exponential_tilt(rng, 10_000, dist, tilt_param=0.0)
+    # / sample mean should be near original mu
+    assert abs(np.mean(samples) - mu) < 0.15
+    # / all likelihood ratios should be ~1.0 (same distribution)
+    np.testing.assert_allclose(weights, 1.0, atol=1e-10)
+
+
+def test_tail_probability_known_normal():
+    # / P(Z > 2) for standard normal is approximately 0.0228
+    rng = np.random.default_rng(42)
+    dist = stats.norm(loc=0, scale=1)
+    gamma = optimal_tilt_parameter(2.0, 0.0, 1.0)
+    samples, weights = exponential_tilt(rng, 50_000, dist, tilt_param=gamma)
+    result = estimate_tail_probability(samples, weights, threshold=2.0)
+    true_prob = 1 - stats.norm.cdf(2.0)  # 0.02275
+    assert abs(result["probability"] - true_prob) < 0.005
+
+
+def test_tail_probability_all_below_threshold_returns_zero():
+    # / if all samples are below threshold, probability should be 0
+    samples = np.array([-1.0, -2.0, -3.0, 0.0, 0.5])
+    weights = np.ones(5)
+    result = estimate_tail_probability(samples, weights, threshold=100.0)
+    assert result["probability"] == 0.0
+
+
+def test_optimal_tilt_parameter_exact_formula():
+    # / gamma = (threshold - mu - sigma) / sigma^2
+    # / threshold=5, mu=1, sigma=2 => gamma = (5-1-2)/4 = 0.5
+    gamma = optimal_tilt_parameter(5.0, 1.0, 2.0)
+    expected = (5.0 - 1.0 - 2.0) / (2.0**2)
+    assert gamma == pytest.approx(expected)
+    assert gamma == pytest.approx(0.5)
+
+
+def test_ess_with_n_equal_weights_returns_n():
+    # / ESS = (sum w)^2 / sum(w^2) = (n*w)^2 / (n*w^2) = n for uniform
+    for n in [10, 100, 1000]:
+        weights = np.ones(n) * 3.7  # / any constant value
+        ess = effective_sample_size(weights)
+        assert ess == pytest.approx(float(n))
+
+
+def test_ess_with_one_dominant_weight_near_1():
+    # / one weight = 1000, rest = epsilon -> ESS ~1
+    n = 500
+    weights = np.full(n, 1e-10)
+    weights[0] = 1000.0
+    ess = effective_sample_size(weights)
+    assert ess < 2.0
+
+
+def test_likelihood_ratios_sum_to_n_approximately():
+    # / importance sampling identity: E_q[L(x)] = 1 under the tilted distribution
+    # / so mean of likelihood ratios should be ~1.0 for large n
+    rng = np.random.default_rng(42)
+    dist = stats.norm(loc=0, scale=1)
+    samples, weights = exponential_tilt(rng, 50_000, dist, tilt_param=1.0)
+    # / mean of likelihood ratios converges to 1.0
+    assert abs(np.mean(weights) - 1.0) < 0.05

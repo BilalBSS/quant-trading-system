@@ -1079,3 +1079,316 @@ class TestIntegrationStrategy002:
         result = s.should_exit("AAPL", data, 100.0, entry_date, 80)
         assert result.should_exit is True
         assert "time exit" in result.reason
+
+
+# ---------------------------------------------------------------------------
+# / deep failure-pinpointing tests — entry operators
+# ---------------------------------------------------------------------------
+
+class TestEntryOperatorsDeep:
+    def test_and_with_three_signals_one_fails(self):
+        # / and operator: if even one signal fails, overall should fail
+        cfg = _base_config(entry_conditions={
+            "operator": "AND",
+            "signals": [
+                {"indicator": "sma", "condition": "price_above", "period": 20},
+                {"indicator": "adx", "condition": "below", "threshold": 90, "period": 14},
+                # / rsi below 1 is impossible — this signal will fail
+                {"indicator": "rsi", "condition": "below", "threshold": 1, "period": 14},
+            ],
+        })
+        s = ConfigDrivenStrategy(cfg)
+        data = _ohlcv_rising(150)
+        result = s.should_enter("AAPL", data)
+        assert result.should_enter is False
+        assert result.strength == 0.0
+
+    def test_or_strength_uses_max_of_passing(self):
+        # / or operator: strength should be max of passing signals
+        # / sma price_above returns 0.5 when it passes, adx below returns 0.5
+        # / both pass on rising data — max of passing should be 0.5
+        cfg = _base_config(entry_conditions={
+            "operator": "OR",
+            "signals": [
+                {"indicator": "sma", "condition": "price_above", "period": 20},
+                {"indicator": "adx", "condition": "below", "threshold": 90, "period": 14},
+            ],
+        })
+        s = ConfigDrivenStrategy(cfg)
+        data = _ohlcv_rising(150)
+        result = s.should_enter("AAPL", data)
+        assert result.should_enter is True
+        # / both signals return 0.5, so max should be 0.5
+        assert result.strength == pytest.approx(0.5)
+
+    def test_empty_signals_returns_true_with_strength_1(self):
+        # / no signals means auto-pass with strength 1.0
+        cfg = _base_config(entry_conditions={"operator": "AND", "signals": []})
+        s = ConfigDrivenStrategy(cfg)
+        data = _ohlcv(120)
+        result = s.should_enter("AAPL", data)
+        assert result.should_enter is True
+        assert result.strength == pytest.approx(1.0)
+        assert "no technical conditions" in result.reasons
+
+
+# ---------------------------------------------------------------------------
+# / deep failure-pinpointing tests — position sizing
+# ---------------------------------------------------------------------------
+
+class TestPositionSizingDeep:
+    def test_kelly_with_strength_zero_gives_zero_qty(self):
+        cfg = _base_config(position_sizing={
+            "method": "kelly_fraction",
+            "max_position_pct": 0.08,
+            "kelly_fraction": 0.25,
+        })
+        s = ConfigDrivenStrategy(cfg)
+        result = s.position_size(equity=100_000, price=150.0, strength=0.0)
+        # / kelly_f * 0 = 0, min(0, 0.08) = 0 => value = 0 => qty = 0
+        assert result.qty == 0
+        assert result.pct_of_portfolio == 0
+
+    def test_kelly_exact_formula(self):
+        # / kelly_fraction * strength * equity / price, capped at max_pct
+        cfg = _base_config(position_sizing={
+            "method": "kelly_fraction",
+            "max_position_pct": 0.08,
+            "kelly_fraction": 0.25,
+        })
+        s = ConfigDrivenStrategy(cfg)
+        # / 0.25 * 0.2 = 0.05, below cap of 0.08
+        result = s.position_size(equity=100_000, price=200.0, strength=0.2)
+        pct = min(0.25 * 0.2, 0.08)  # = 0.05
+        expected_value = 100_000 * pct  # = 5000
+        expected_qty = int(expected_value / 200.0)  # = 25
+        assert pct == pytest.approx(0.05)
+        assert result.qty == expected_qty
+        assert result.method == "kelly_fraction"
+
+        # / now with strength that exceeds cap: 0.25 * 0.5 = 0.125 > 0.08
+        result2 = s.position_size(equity=100_000, price=200.0, strength=0.5)
+        pct2 = min(0.25 * 0.5, 0.08)  # = 0.08 (capped)
+        expected_qty2 = int(100_000 * pct2 / 200.0)  # = 40
+        assert result2.qty == expected_qty2
+
+    def test_price_zero_returns_zero_qty(self):
+        cfg = _base_config(position_sizing={
+            "method": "kelly_fraction",
+            "max_position_pct": 0.08,
+            "kelly_fraction": 0.25,
+        })
+        s = ConfigDrivenStrategy(cfg)
+        result = s.position_size(equity=100_000, price=0.0, strength=0.8)
+        assert result.qty == 0
+        assert result.pct_of_portfolio == 0
+        assert result.method == "kelly_fraction"
+
+    def test_very_small_price_large_qty(self):
+        # / penny stock scenario: small price should yield large share count
+        cfg = _base_config(position_sizing={
+            "method": "fixed_pct",
+            "max_position_pct": 0.05,
+        })
+        s = ConfigDrivenStrategy(cfg)
+        result = s.position_size(equity=100_000, price=0.10, strength=0.5)
+        # / 100_000 * 0.05 / 0.10 = 50_000 shares
+        assert result.qty == int(100_000 * 0.05 / 0.10)
+        assert result.qty == 50_000
+
+
+# ---------------------------------------------------------------------------
+# / deep failure-pinpointing tests — exit stop loss fixed
+# ---------------------------------------------------------------------------
+
+class TestExitStopLossFixedDeep:
+    def test_exact_stop_price(self):
+        # / verify stop_price = entry_price * (1 - pct)
+        cfg = _base_config(exit_conditions={
+            "stop_loss": {"type": "fixed_pct", "pct": 0.05},
+        })
+        s = ConfigDrivenStrategy(cfg)
+        entry_price = 100.0
+        expected_stop = entry_price * (1 - 0.05)  # = 95.0
+        # / create data where close at bar 10 is exactly at stop price
+        n = 50
+        dates = pd.bdate_range("2024-01-02", periods=n, freq="B")
+        close = np.full(n, 98.0)
+        close[10] = expected_stop  # exactly at stop
+        close[11] = expected_stop - 0.01  # below stop
+        high = close + 1.0
+        low = close - 1.0
+        open_ = close + 0.5
+        volume = np.full(n, 1_000_000.0)
+        data = pd.DataFrame(
+            {"open": open_, "high": high, "low": low, "close": close, "volume": volume},
+            index=dates,
+        )
+        entry_date = dates[0]
+        # / at stop price (<=) should trigger
+        result = s.should_exit("AAPL", data, entry_price, entry_date, 10)
+        assert result.should_exit is True
+        assert "stop loss" in result.reason
+
+    def test_stop_not_triggered_when_price_above_stop(self):
+        # / price just above stop should not trigger
+        cfg = _base_config(exit_conditions={
+            "stop_loss": {"type": "fixed_pct", "pct": 0.05},
+        })
+        s = ConfigDrivenStrategy(cfg)
+        entry_price = 100.0
+        stop_price = entry_price * (1 - 0.05)  # = 95.0
+        n = 50
+        dates = pd.bdate_range("2024-01-02", periods=n, freq="B")
+        close = np.full(n, 96.0)  # above 95.0
+        high = close + 1.0
+        low = close - 1.0
+        open_ = close + 0.5
+        volume = np.full(n, 1_000_000.0)
+        data = pd.DataFrame(
+            {"open": open_, "high": high, "low": low, "close": close, "volume": volume},
+            index=dates,
+        )
+        entry_date = dates[0]
+        result = s.should_exit("AAPL", data, entry_price, entry_date, 10)
+        assert result.should_exit is False
+
+
+# ---------------------------------------------------------------------------
+# / deep failure-pinpointing tests — exit time exit
+# ---------------------------------------------------------------------------
+
+class TestExitTimeExitDeep:
+    def test_exactly_at_max_holding_days(self):
+        # / days_held >= max_days should trigger; test with exactly max_days
+        cfg = _base_config(exit_conditions={
+            "time_exit": {"max_holding_days": 10},
+        })
+        s = ConfigDrivenStrategy(cfg)
+        # / build data with known calendar day spacing
+        n = 30
+        dates = pd.bdate_range("2024-01-02", periods=n, freq="B")
+        close = np.full(n, 100.0)
+        high = close + 1.0
+        low = close - 1.0
+        open_ = close + 0.5
+        volume = np.full(n, 1_000_000.0)
+        data = pd.DataFrame(
+            {"open": open_, "high": high, "low": low, "close": close, "volume": volume},
+            index=dates,
+        )
+        entry_date = dates[0]
+        # / find the first bar where calendar days >= 10
+        for i in range(len(dates)):
+            days_held = (dates[i] - entry_date).days
+            if days_held == 10 or (days_held > 10 and i > 0 and (dates[i - 1] - entry_date).days < 10):
+                result = s.should_exit("AAPL", data, 100.0, entry_date, i)
+                assert result.should_exit is True
+                assert "time exit" in result.reason
+                break
+
+    def test_one_day_before_max(self):
+        # / days_held < max_days should not trigger
+        cfg = _base_config(exit_conditions={
+            "time_exit": {"max_holding_days": 10},
+        })
+        s = ConfigDrivenStrategy(cfg)
+        n = 30
+        dates = pd.bdate_range("2024-01-02", periods=n, freq="B")
+        close = np.full(n, 100.0)
+        high = close + 1.0
+        low = close - 1.0
+        open_ = close + 0.5
+        volume = np.full(n, 1_000_000.0)
+        data = pd.DataFrame(
+            {"open": open_, "high": high, "low": low, "close": close, "volume": volume},
+            index=dates,
+        )
+        entry_date = dates[0]
+        # / find the last bar where days_held < 10 (i.e., days_held == 9 or less)
+        for i in range(len(dates)):
+            days_held = (dates[i] - entry_date).days
+            if days_held == 9:
+                result = s.should_exit("AAPL", data, 100.0, entry_date, i)
+                assert result.should_exit is False
+                break
+
+
+# ---------------------------------------------------------------------------
+# / deep failure-pinpointing tests — fundamental filters
+# ---------------------------------------------------------------------------
+
+class TestFundamentalFiltersDeep:
+    def test_all_filters_together_pass(self):
+        # / config with all filter fields set, analysis that passes all
+        cfg = _base_config(
+            fundamental_filters={
+                "pe_ratio_max": 40,
+                "pe_vs_sector": "below_average",
+                "revenue_growth_min": 0.01,
+                "fcf_margin_min": 0.10,
+                "debt_to_equity_max": 2.0,
+                "dcf_upside_min": 0.05,
+                "insider_buying_recent": True,
+            },
+            entry_conditions={"operator": "AND", "signals": []},
+        )
+        s = ConfigDrivenStrategy(cfg)
+        analysis = AnalysisData(
+            pe_ratio=20.0,
+            sector_pe_avg=25.0,
+            revenue_growth=0.10,
+            fcf_margin=0.20,
+            debt_to_equity=0.8,
+            dcf_upside=0.15,
+            insider_net_buy_ratio=0.5,
+        )
+        data = _ohlcv(120)
+        result = s.should_enter("AAPL", data, analysis)
+        assert result.should_enter is True
+        assert "fundamentals passed" in result.reasons
+
+    def test_insider_buying_recent_true_requires_positive_ratio(self):
+        # / insider_buying_recent=True requires insider_net_buy_ratio > 0
+        cfg = _base_config(
+            fundamental_filters={"insider_buying_recent": True},
+            entry_conditions={"operator": "AND", "signals": []},
+        )
+        s = ConfigDrivenStrategy(cfg)
+        data = _ohlcv(120)
+
+        # / ratio = 0 should fail (insider_net_buy_ratio <= 0)
+        analysis_zero = AnalysisData(insider_net_buy_ratio=0.0)
+        result_zero = s.should_enter("AAPL", data, analysis_zero)
+        assert result_zero.should_enter is False
+        assert any("insider" in r for r in result_zero.reasons)
+
+        # / negative ratio should fail
+        analysis_neg = AnalysisData(insider_net_buy_ratio=-0.3)
+        result_neg = s.should_enter("AAPL", data, analysis_neg)
+        assert result_neg.should_enter is False
+
+        # / positive ratio should pass
+        analysis_pos = AnalysisData(insider_net_buy_ratio=0.1)
+        result_pos = s.should_enter("AAPL", data, analysis_pos)
+        assert result_pos.should_enter is True
+
+    def test_dcf_upside_exact_boundary(self):
+        # / dcf_upside exactly at min should pass (not < min)
+        cfg = _base_config(
+            fundamental_filters={"dcf_upside_min": 0.10},
+            entry_conditions={"operator": "AND", "signals": []},
+        )
+        s = ConfigDrivenStrategy(cfg)
+        data = _ohlcv(120)
+
+        # / exactly at boundary: 0.10 is NOT < 0.10, so should pass
+        analysis_at = AnalysisData(dcf_upside=0.10)
+        result_at = s.should_enter("AAPL", data, analysis_at)
+        assert result_at.should_enter is True
+
+        # / just below: 0.099 < 0.10, should fail
+        analysis_below = AnalysisData(dcf_upside=0.099)
+        result_below = s.should_enter("AAPL", data, analysis_below)
+        assert result_below.should_enter is False
+        assert any("dcf" in r for r in result_below.reasons)
