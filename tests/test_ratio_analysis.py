@@ -153,11 +153,11 @@ class TestScoreDebtEquity:
         assert score is not None
         assert score < 30
 
-    def test_yfinance_percentage_format(self):
-        # / yfinance returns 50 meaning 0.5x
+    def test_very_high_debt(self):
+        # / d/e 50 = extremely leveraged, score should be 0
         score = score_debt_equity(Decimal("50"))
         assert score is not None
-        assert score > 80
+        assert score == 0.0
 
     def test_none(self):
         assert score_debt_equity(None) is None
@@ -223,7 +223,7 @@ class TestAnalyzeRatios:
             "revenue_growth_1y": Decimal("0.10"),
             "revenue_growth_3y": None,
             "fcf_margin": Decimal("0.22"),
-            "debt_to_equity": Decimal("45"),
+            "debt_to_equity": Decimal("0.45"),
             "sector": "Technology",
             "sector_pe_avg": Decimal("28"),
             "sector_ps_avg": Decimal("9"),
