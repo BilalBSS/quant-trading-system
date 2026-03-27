@@ -178,3 +178,52 @@ class TestRoundtrip:
     def test_all_full_universe_symbols_roundtrip(self):
         for sym in FULL_UNIVERSE:
             assert from_alpaca(to_alpaca(sym)) == sym, f"{sym} failed roundtrip"
+
+
+class TestSectors:
+    def test_get_sector_returns_correct_sector(self):
+        from src.data.symbols import get_sector
+        assert get_sector("PLTR") == "cloud_cyber"
+        assert get_sector("NVDA") == "semis"
+        assert get_sector("BTC-USD") == "large_crypto"
+        assert get_sector("SPY") == "etfs"
+
+    def test_get_sector_returns_none_for_unknown(self):
+        from src.data.symbols import get_sector
+        assert get_sector("NONEXISTENT") is None
+        assert get_sector("") is None
+
+    def test_get_sector_symbols_returns_list(self):
+        from src.data.symbols import get_sector_symbols
+        syms = get_sector_symbols("semis")
+        assert "NVDA" in syms
+        assert "AMD" in syms
+        assert len(syms) == 6
+
+    def test_get_sector_symbols_unknown_returns_empty(self):
+        from src.data.symbols import get_sector_symbols
+        assert get_sector_symbols("nonexistent") == []
+
+    def test_resolve_universe_with_sector_name(self):
+        result = resolve_universe("cloud_cyber")
+        assert "PLTR" in result
+        assert "NET" in result
+        assert len(result) == 10
+
+    def test_all_symbols_have_sectors(self):
+        from src.data.symbols import SECTORS, get_sector
+        all_sectored = []
+        for syms in SECTORS.values():
+            all_sectored.extend(syms)
+        # / every symbol in FULL_UNIVERSE should be in a sector
+        for sym in FULL_UNIVERSE:
+            assert get_sector(sym) is not None, f"{sym} has no sector"
+
+    def test_sectors_cover_full_universe(self):
+        from src.data.symbols import SECTORS
+        all_sectored = set()
+        for syms in SECTORS.values():
+            all_sectored.update(syms)
+        # / TSLA is in EQUITY_UNIVERSE but in mega_tech? let's check
+        for sym in FULL_UNIVERSE:
+            assert sym in all_sectored, f"{sym} missing from SECTORS"
