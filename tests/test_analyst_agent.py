@@ -12,7 +12,7 @@ from src.analysis.ratio_analysis import RatioScore
 from src.analysis.dcf_model import DCFResult
 from src.analysis.earnings_signals import EarningsSignal
 from src.analysis.insider_activity import InsiderSignal
-from src.analysis.ai_summary import AnalysisSummary
+from src.analysis.ai_summary import AnalysisSummary, DualAnalysis
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +76,14 @@ def _make_summary() -> AnalysisSummary:
         symbol="AAPL", date=date.today(),
         summary="AAPL looks bullish", model_used=None,
         signal="bullish", confidence=70.0,
+    )
+
+
+def _make_dual_analysis() -> DualAnalysis:
+    return DualAnalysis(
+        groq=_make_summary(),
+        deepseek=None,
+        consensus="bullish",
     )
 
 
@@ -207,7 +215,7 @@ class TestAnalystAgentRun:
             patch("src.agents.analyst_agent.analyze_dcf", new_callable=AsyncMock, return_value=_make_dcf()),
             patch("src.agents.analyst_agent.analyze_earnings", new_callable=AsyncMock, return_value=_make_earnings()),
             patch("src.agents.analyst_agent.analyze_insider_activity", new_callable=AsyncMock, return_value=_make_insider()),
-            patch("src.agents.analyst_agent.generate_summary", new_callable=AsyncMock, return_value=_make_summary()),
+            patch("src.agents.analyst_agent.generate_dual_analysis", new_callable=AsyncMock, return_value=_make_dual_analysis()),
             patch("src.agents.analyst_agent.tools.store_analysis_score", new_callable=AsyncMock, return_value=1) as mock_store,
         ):
             results = await self.agent.run(pool, ["AAPL"])
@@ -230,7 +238,7 @@ class TestAnalystAgentRun:
             patch("src.agents.analyst_agent.analyze_dcf", new_callable=AsyncMock, return_value=_make_dcf()),
             patch("src.agents.analyst_agent.analyze_earnings", new_callable=AsyncMock, return_value=_make_earnings()),
             patch("src.agents.analyst_agent.analyze_insider_activity", new_callable=AsyncMock, return_value=_make_insider()),
-            patch("src.agents.analyst_agent.generate_summary", new_callable=AsyncMock, return_value=_make_summary()),
+            patch("src.agents.analyst_agent.generate_dual_analysis", new_callable=AsyncMock, return_value=_make_dual_analysis()),
             patch("src.agents.analyst_agent.tools.store_analysis_score", new_callable=AsyncMock, return_value=1),
         ):
             results = await self.agent.run(pool, ["AAPL"])
@@ -249,7 +257,7 @@ class TestAnalystAgentRun:
             patch("src.agents.analyst_agent.analyze_dcf", new_callable=AsyncMock, side_effect=Exception("fail")),
             patch("src.agents.analyst_agent.analyze_earnings", new_callable=AsyncMock, side_effect=Exception("fail")),
             patch("src.agents.analyst_agent.analyze_insider_activity", new_callable=AsyncMock, side_effect=Exception("fail")),
-            patch("src.agents.analyst_agent.generate_summary", new_callable=AsyncMock, return_value=_make_summary()),
+            patch("src.agents.analyst_agent.generate_dual_analysis", new_callable=AsyncMock, return_value=_make_dual_analysis()),
             patch("src.agents.analyst_agent.tools.store_analysis_score", new_callable=AsyncMock, return_value=1),
         ):
             results = await self.agent.run(pool, ["AAPL"])
@@ -273,14 +281,14 @@ class TestAnalystAgentRun:
             patch("src.agents.analyst_agent.analyze_dcf", new_callable=AsyncMock, return_value=_make_dcf()),
             patch("src.agents.analyst_agent.analyze_earnings", new_callable=AsyncMock, return_value=_make_earnings()),
             patch("src.agents.analyst_agent.analyze_insider_activity", new_callable=AsyncMock, return_value=_make_insider()),
-            patch("src.agents.analyst_agent.generate_summary", new_callable=AsyncMock, return_value=_make_summary()) as mock_summary,
+            patch("src.agents.analyst_agent.generate_dual_analysis", new_callable=AsyncMock, return_value=_make_dual_analysis()) as mock_dual,
             patch("src.agents.analyst_agent.tools.store_analysis_score", new_callable=AsyncMock, return_value=1) as mock_store,
         ):
             await self.agent.run(pool, ["AAPL"])
 
-        # / regime passed to generate_summary
-        mock_summary.assert_called_once()
-        call_kwargs = mock_summary.call_args
+        # / regime passed to generate_dual_analysis
+        mock_dual.assert_called_once()
+        call_kwargs = mock_dual.call_args
         assert call_kwargs.kwargs["regime"] == "bear"
         # / regime passed to store_analysis_score
         store_kwargs = mock_store.call_args.kwargs
@@ -306,7 +314,7 @@ class TestAnalystAgentRun:
             patch("src.agents.analyst_agent.analyze_dcf", new_callable=AsyncMock, return_value=_make_dcf()),
             patch("src.agents.analyst_agent.analyze_earnings", new_callable=AsyncMock, return_value=_make_earnings()),
             patch("src.agents.analyst_agent.analyze_insider_activity", new_callable=AsyncMock, return_value=_make_insider()),
-            patch("src.agents.analyst_agent.generate_summary", new_callable=AsyncMock, return_value=_make_summary()),
+            patch("src.agents.analyst_agent.generate_dual_analysis", new_callable=AsyncMock, return_value=_make_dual_analysis()),
             patch("src.agents.analyst_agent.tools.store_analysis_score", new_callable=AsyncMock, return_value=1),
         ):
             results = await self.agent.run(pool, ["AAPL", "MSFT"])
@@ -327,7 +335,7 @@ class TestAnalystAgentRun:
             patch("src.agents.analyst_agent.analyze_dcf", new_callable=AsyncMock, return_value=None),
             patch("src.agents.analyst_agent.analyze_earnings", new_callable=AsyncMock, return_value=None),
             patch("src.agents.analyst_agent.analyze_insider_activity", new_callable=AsyncMock, return_value=None),
-            patch("src.agents.analyst_agent.generate_summary", new_callable=AsyncMock, return_value=_make_summary()),
+            patch("src.agents.analyst_agent.generate_dual_analysis", new_callable=AsyncMock, return_value=_make_dual_analysis()),
             patch("src.agents.analyst_agent.tools.store_analysis_score", new_callable=AsyncMock, return_value=1) as mock_store,
         ):
             await self.agent.run(pool, ["AAPL"])
@@ -349,7 +357,7 @@ class TestAnalystAgentRun:
             patch("src.agents.analyst_agent.analyze_dcf", new_callable=AsyncMock, return_value=None),
             patch("src.agents.analyst_agent.analyze_earnings", new_callable=AsyncMock, return_value=None),
             patch("src.agents.analyst_agent.analyze_insider_activity", new_callable=AsyncMock, return_value=None),
-            patch("src.agents.analyst_agent.generate_summary", new_callable=AsyncMock, return_value=_make_summary()),
+            patch("src.agents.analyst_agent.generate_dual_analysis", new_callable=AsyncMock, return_value=_make_dual_analysis()),
             patch("src.agents.analyst_agent.tools.store_analysis_score", new_callable=AsyncMock, return_value=1) as mock_store,
         ):
             await self.agent.run(pool, ["AAPL"])
