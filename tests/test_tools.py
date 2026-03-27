@@ -610,6 +610,8 @@ class TestAnalysisDataRoundTrip:
             "sector_pe_avg", "sector_ps_avg", "dcf_upside",
             "insider_net_buy_ratio", "earnings_surprise_pct",
             "consecutive_beats", "fundamental_score",
+            "nvt_ratio", "funding_rate", "exchange_flow_ratio",
+            "news_sentiment_score",
         }
         assert set(d.keys()) == expected_keys
 
