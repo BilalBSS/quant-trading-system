@@ -18,8 +18,11 @@ from .ratio_analysis import RatioScore
 
 logger = structlog.get_logger(__name__)
 
-# / groq free tier: llama models, 30 req/min
+# / groq free tier: separate rate limit pools per model
 DEFAULT_MODEL = "llama-3.1-8b-instant"
+FALLBACK_MODEL = "openai/gpt-oss-20b"
+DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_BASE = "https://api.deepseek.com/v1"
 MAX_TOKENS = 500
 
 
@@ -31,6 +34,13 @@ class AnalysisSummary:
     model_used: str | None  # none if fallback was used
     signal: str             # bullish, bearish, neutral
     confidence: float       # 0-100
+
+
+@dataclass
+class DualAnalysis:
+    groq: AnalysisSummary
+    deepseek: AnalysisSummary | None
+    consensus: str  # bullish, bearish, neutral, disagree
 
 
 def _build_prompt(
@@ -231,5 +241,123 @@ async def generate_summary(
             )
 
     except Exception as exc:
+        # / rate limit or other error — try fallback model
+        if "429" in str(exc) or "rate" in str(exc).lower():
+            try:
+                logger.info("groq_rate_limited_trying_fallback", symbol=symbol, fallback=FALLBACK_MODEL)
+                async with httpx.AsyncClient(timeout=15.0) as client2:
+                    resp2 = await client2.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": FALLBACK_MODEL,
+                            "messages": [
+                                {"role": "system", "content": "You are a concise equity analyst. Give actionable signals."},
+                                {"role": "user", "content": prompt},
+                            ],
+                            "max_tokens": MAX_TOKENS,
+                            "temperature": 0.3,
+                        },
+                    )
+                    resp2.raise_for_status()
+                    data2 = resp2.json()
+                    summary_text = data2["choices"][0]["message"]["content"].strip()
+                    lower = summary_text.lower()
+                    signal = "bullish" if "bullish" in lower[:50] else "bearish" if "bearish" in lower[:50] else "neutral"
+                    logger.info("ai_summary_generated", symbol=symbol, model=FALLBACK_MODEL)
+                    return AnalysisSummary(
+                        symbol=symbol, date=date.today(), summary=summary_text,
+                        model_used=FALLBACK_MODEL, signal=signal, confidence=75.0,
+                    )
+            except Exception:
+                pass
+
         logger.warning("groq_api_failed_using_fallback", symbol=symbol, error=type(exc).__name__)
         return _build_fallback_summary(symbol, ratio, dcf, earnings, insider)
+
+
+async def _generate_deepseek_summary(
+    symbol: str,
+    ratio: RatioScore | None = None,
+    dcf: DCFResult | None = None,
+    earnings: EarningsSignal | None = None,
+    insider: InsiderSignal | None = None,
+    regime: str | None = None,
+) -> AnalysisSummary | None:
+    # / independent second opinion via deepseek — gets same raw data, NOT groq's output
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    if not api_key:
+        return None
+
+    prompt = _build_prompt(symbol, ratio, dcf, earnings, insider, regime)
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                f"{DEEPSEEK_BASE}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": DEEPSEEK_MODEL,
+                    "messages": [
+                        {"role": "system", "content": "You are a concise equity analyst. Give actionable signals."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_tokens": MAX_TOKENS,
+                    "temperature": 0.3,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            summary_text = data["choices"][0]["message"]["content"].strip()
+            lower = summary_text.lower()
+            signal = "bullish" if "bullish" in lower[:50] else "bearish" if "bearish" in lower[:50] else "neutral"
+            logger.info("deepseek_summary_generated", symbol=symbol)
+            return AnalysisSummary(
+                symbol=symbol, date=date.today(), summary=summary_text,
+                model_used=DEEPSEEK_MODEL, signal=signal, confidence=75.0,
+            )
+    except Exception as exc:
+        logger.warning("deepseek_api_failed", symbol=symbol, error=str(exc))
+        return None
+
+
+def _compute_consensus(groq_signal: str, deepseek_signal: str | None) -> str:
+    # / compute ai consensus from two independent analyses
+    if deepseek_signal is None:
+        return groq_signal
+    if groq_signal == deepseek_signal:
+        return groq_signal
+    return "disagree"
+
+
+async def generate_dual_analysis(
+    symbol: str,
+    ratio: RatioScore | None = None,
+    dcf: DCFResult | None = None,
+    earnings: EarningsSignal | None = None,
+    insider: InsiderSignal | None = None,
+    regime: str | None = None,
+) -> DualAnalysis:
+    # / run groq + deepseek in parallel, compute consensus
+    import asyncio
+    groq_task = generate_summary(symbol, ratio, dcf, earnings, insider, regime)
+    deepseek_task = _generate_deepseek_summary(symbol, ratio, dcf, earnings, insider, regime)
+
+    groq_result, deepseek_result = await asyncio.gather(groq_task, deepseek_task)
+
+    consensus = _compute_consensus(
+        groq_result.signal,
+        deepseek_result.signal if deepseek_result else None,
+    )
+
+    logger.info(
+        "dual_analysis_complete", symbol=symbol,
+        groq=groq_result.signal, deepseek=deepseek_result.signal if deepseek_result else "unavailable",
+        consensus=consensus,
+    )
+
+    return DualAnalysis(groq=groq_result, deepseek=deepseek_result, consensus=consensus)
