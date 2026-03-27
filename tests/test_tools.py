@@ -611,7 +611,7 @@ class TestAnalysisDataRoundTrip:
             "insider_net_buy_ratio", "earnings_surprise_pct",
             "consecutive_beats", "fundamental_score",
             "nvt_ratio", "funding_rate", "exchange_flow_ratio",
-            "news_sentiment_score",
+            "news_sentiment_score", "ai_consensus",
         }
         assert set(d.keys()) == expected_keys
 
