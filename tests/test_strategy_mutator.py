@@ -289,6 +289,23 @@ class TestRandomTweak:
             if days is not None:
                 assert days >= 1
 
+    def test_random_tweak_handles_none_values(self):
+        # / signals with None values should not crash
+        rng = np.random.default_rng(42)
+        config = _base_config()
+        config["entry_conditions"]["signals"][0]["period"] = None
+        config["entry_conditions"]["signals"][0]["threshold"] = None
+        config["entry_conditions"]["signals"][0]["multiplier"] = None
+        config["exit_conditions"]["stop_loss"]["pct"] = None
+        config["exit_conditions"]["time_exit"]["max_holding_days"] = None
+
+        result = _random_tweak(config, rng)
+        assert result["id"] != config["id"]
+        # / None values should remain None (not crash)
+        sig = result["entry_conditions"]["signals"][0]
+        assert sig["period"] is None
+        assert sig["threshold"] is None
+
 
 # ────────────────────────────────────────────────────────────────
 # _parse_json_response

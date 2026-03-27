@@ -9,7 +9,6 @@ from src.data.news_sentiment import (
     _keyword_score,
     compute_sentiment_score,
     fetch_company_news,
-    fetch_news_sentiment,
     store_sentiment,
 )
 
@@ -62,56 +61,29 @@ class TestFetchCompanyNews:
             assert result == []
 
 
-class TestFetchNewsSentiment:
-    @pytest.mark.asyncio
-    async def test_returns_sentiment(self):
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "sentiment": {"bullishPercent": 0.7, "bearishPercent": 0.3},
-            "buzz": {"articlesInLastWeek": 42, "buzz": 1.5},
-            "sectorAverageBullishPercent": 0.55,
-        }
-        mock_resp.raise_for_status = MagicMock()
-
-        with patch.dict(os.environ, {"FINNHUB_API_KEY": "key"}):
-            with patch("src.data.news_sentiment.api_get", new_callable=AsyncMock, return_value=mock_resp):
-                result = await fetch_news_sentiment("AAPL")
-                assert result["bullish_percent"] == 0.7
-                assert result["articles_in_last_week"] == 42
-
-    @pytest.mark.asyncio
-    async def test_returns_none_without_key(self):
-        with patch.dict(os.environ, {}, clear=True):
-            result = await fetch_news_sentiment("AAPL")
-            assert result is None
-
-
 class TestComputeSentimentScore:
     @pytest.mark.asyncio
-    async def test_uses_finnhub_sentiment(self):
-        with patch("src.data.news_sentiment.fetch_news_sentiment", new_callable=AsyncMock) as mock:
-            mock.return_value = {"bullish_percent": 0.8, "bearish_percent": 0.2}
+    async def test_scores_positive_headlines(self):
+        with patch("src.data.news_sentiment.fetch_company_news", new_callable=AsyncMock) as mock_news:
+            mock_news.return_value = [
+                {"headline": "Company beats estimates with strong growth"},
+                {"headline": "Record revenue and profit"},
+            ]
             score = await compute_sentiment_score("AAPL")
-            assert score == pytest.approx(0.6)
+            assert score > 0
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_keywords(self):
-        with patch("src.data.news_sentiment.fetch_news_sentiment", new_callable=AsyncMock) as mock_sent:
-            mock_sent.return_value = None
-            with patch("src.data.news_sentiment.fetch_company_news", new_callable=AsyncMock) as mock_news:
-                mock_news.return_value = [
-                    {"headline": "Company beats estimates with strong growth"},
-                    {"headline": "Record revenue and profit"},
-                ]
-                score = await compute_sentiment_score("AAPL")
-                assert score > 0
+    async def test_returns_zero_no_articles(self):
+        with patch("src.data.news_sentiment.fetch_company_news", new_callable=AsyncMock) as mock_news:
+            mock_news.return_value = []
+            score = await compute_sentiment_score("AAPL")
+            assert score == 0.0
 
     @pytest.mark.asyncio
     async def test_returns_zero_on_failure(self):
-        with patch("src.data.news_sentiment.fetch_news_sentiment", side_effect=Exception("err")):
-            with patch("src.data.news_sentiment.fetch_company_news", side_effect=Exception("err")):
-                score = await compute_sentiment_score("AAPL")
-                assert score == 0.0
+        with patch("src.data.news_sentiment.fetch_company_news", side_effect=Exception("err")):
+            score = await compute_sentiment_score("AAPL")
+            assert score == 0.0
 
 
 class TestStoreSentiment:
