@@ -74,6 +74,8 @@ class TestOrchestratorInit:
             patch("src.agents.orchestrator.BrokerFactory") as m_broker_factory,
             patch("src.agents.orchestrator.load_all_configs", return_value=[mock_strat]) as m_load,
             patch.object(orch, "_analyst_loop", new_callable=AsyncMock) as m_al,
+            patch.object(orch, "_deepseek_loop", new_callable=AsyncMock) as m_dl,
+            patch.object(orch, "_reasoner_loop", new_callable=AsyncMock) as m_rl2,
             patch.object(orch, "_strategy_loop", new_callable=AsyncMock) as m_sl,
             patch.object(orch, "_risk_poll_loop", new_callable=AsyncMock) as m_rl,
             patch.object(orch, "_executor_poll_loop", new_callable=AsyncMock) as m_el,
@@ -98,6 +100,8 @@ class TestOrchestratorInit:
             patch("src.agents.orchestrator.BrokerFactory"),
             patch("src.agents.orchestrator.load_all_configs", return_value=[s1, s2]) as m_load,
             patch.object(orch, "_analyst_loop", new_callable=AsyncMock),
+            patch.object(orch, "_deepseek_loop", new_callable=AsyncMock),
+            patch.object(orch, "_reasoner_loop", new_callable=AsyncMock),
             patch.object(orch, "_strategy_loop", new_callable=AsyncMock),
             patch.object(orch, "_risk_poll_loop", new_callable=AsyncMock),
             patch.object(orch, "_executor_poll_loop", new_callable=AsyncMock),
@@ -236,7 +240,7 @@ class TestAnalystLoop:
 
         call_count = 0
 
-        async def _fake_run(pool, symbols):
+        async def _fake_run(pool, symbols, run_deepseek=False):
             nonlocal call_count
             call_count += 1
             # / stop after first iteration
@@ -381,7 +385,7 @@ class TestLoopErrorResilience:
 
         call_count = 0
 
-        async def _raise_then_stop(pool, symbols):
+        async def _raise_then_stop(pool, symbols, run_deepseek=False):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -497,3 +501,108 @@ class TestEvolutionLoop:
             await orch._evolution_loop()
 
         assert call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# / deepseek loop tests
+# ---------------------------------------------------------------------------
+
+class TestDeepseekLoop:
+    @pytest.mark.asyncio
+    async def test_deepseek_loop_waits_then_runs(self):
+        from src.agents.orchestrator import DEEPSEEK_INTERVAL
+        orch = AgentOrchestrator()
+        orch._pool = _mock_pool()
+
+        run_calls = 0
+        wait_calls = []
+
+        async def _fake_wait(seconds):
+            wait_calls.append(seconds)
+            if len(wait_calls) == 1:
+                return False  # / first wait expires, run deepseek
+            return True  # / stop on second
+
+        async def _fake_run(pool, symbols, run_deepseek=True):
+            nonlocal run_calls
+            run_calls += 1
+
+        orch._analyst.run = _fake_run
+        with patch.object(orch, "_wait_or_stop", side_effect=_fake_wait):
+            await orch._deepseek_loop()
+
+        assert wait_calls[0] == DEEPSEEK_INTERVAL
+        assert run_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_deepseek_loop_passes_run_deepseek_true(self):
+        orch = AgentOrchestrator()
+        orch._pool = _mock_pool()
+
+        deepseek_flags = []
+
+        async def _capture_flag(pool, symbols, run_deepseek=True):
+            deepseek_flags.append(run_deepseek)
+
+        async def _stop_after_run(seconds):
+            if len(deepseek_flags) == 0:
+                return False
+            return True
+
+        orch._analyst.run = _capture_flag
+        with patch.object(orch, "_wait_or_stop", side_effect=_stop_after_run):
+            await orch._deepseek_loop()
+
+        assert deepseek_flags == [True]
+
+
+# ---------------------------------------------------------------------------
+# / reasoner loop tests
+# ---------------------------------------------------------------------------
+
+class TestReasonerLoop:
+    @pytest.mark.asyncio
+    async def test_reasoner_loop_calculates_5pm_wait(self):
+        orch = AgentOrchestrator()
+        orch._pool = _mock_pool()
+
+        wait_seconds_seen = []
+
+        async def _capture_wait(seconds):
+            wait_seconds_seen.append(seconds)
+            return True  # / stop immediately
+
+        with patch.object(orch, "_wait_or_stop", side_effect=_capture_wait):
+            await orch._reasoner_loop()
+
+        assert len(wait_seconds_seen) == 1
+        assert 0 < wait_seconds_seen[0] <= 86400
+
+    @pytest.mark.asyncio
+    async def test_reasoner_loop_calls_synthesis(self):
+        orch = AgentOrchestrator()
+        orch._pool = _mock_pool()
+
+        synthesis_called = False
+        wait_count = 0
+
+        async def _fake_wait(seconds):
+            nonlocal wait_count
+            wait_count += 1
+            if wait_count == 1:
+                return False  # / first wait expires, run synthesis
+            return True  # / stop
+
+        async def _fake_synthesis(pool, symbols):
+            nonlocal synthesis_called
+            synthesis_called = True
+            return {"top_buys": [], "top_avoids": [], "portfolio_risk": "low"}
+
+        with (
+            patch.object(orch, "_wait_or_stop", side_effect=_fake_wait),
+            patch("src.analysis.ai_summary.generate_daily_synthesis", _fake_synthesis),
+            patch("src.notifications.notifier.notify_daily_synthesis"),
+        ):
+            await orch._reasoner_loop()
+
+        assert synthesis_called

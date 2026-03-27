@@ -104,7 +104,7 @@ class TestAnalysisEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         expected_keys = {"score", "signals", "trades", "sentiment", "social_sentiment",
-                         "fundamentals", "dcf", "price_history", "insider_trades"}
+                         "fundamentals", "dcf", "price_history", "insider_trades", "evolution"}
         assert set(data.keys()) == expected_keys
         dashboard._pool = None
 
@@ -169,4 +169,45 @@ class TestAnalysisEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert "db_connected" in data
+        dashboard._pool = None
+
+    @pytest.mark.asyncio
+    async def test_synthesis_endpoint_returns_latest(self):
+        from src.dashboard import app as dashboard
+        pool, conn = _mock_pool()
+        dashboard._pool = pool
+        conn.fetchrow.return_value = None
+        from httpx import AsyncClient, ASGITransport
+        async with AsyncClient(transport=ASGITransport(app=dashboard.app), base_url="http://test") as c:
+            resp = await c.get("/api/synthesis")
+        assert resp.status_code == 200
+        assert resp.json() is None
+        dashboard._pool = None
+
+    @pytest.mark.asyncio
+    async def test_synthesis_history_returns_list(self):
+        from src.dashboard import app as dashboard
+        pool, conn = _mock_pool()
+        dashboard._pool = pool
+        conn.fetch.return_value = []
+        from httpx import AsyncClient, ASGITransport
+        async with AsyncClient(transport=ASGITransport(app=dashboard.app), base_url="http://test") as c:
+            resp = await c.get("/api/synthesis/history?days=3")
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), list)
+        dashboard._pool = None
+
+    @pytest.mark.asyncio
+    async def test_analysis_includes_evolution(self):
+        from src.dashboard import app as dashboard
+        pool, conn = _mock_pool()
+        dashboard._pool = pool
+        conn.fetchrow.return_value = None
+        conn.fetch.return_value = []
+        from httpx import AsyncClient, ASGITransport
+        async with AsyncClient(transport=ASGITransport(app=dashboard.app), base_url="http://test") as c:
+            resp = await c.get("/api/analysis/AAPL")
+        data = resp.json()
+        assert "evolution" in data
+        assert data["evolution"] == []
         dashboard._pool = None

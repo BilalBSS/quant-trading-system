@@ -14,12 +14,14 @@ from src.agents.tools import (
     analysis_data_to_dict,
     dict_to_analysis_data,
     fetch_analysis_score,
+    fetch_daily_synthesis,
     fetch_pending_signals,
     fetch_pending_trades,
     fetch_recent_trades,
     fetch_strategy_scores,
     store_analysis_score,
     store_approved_trade,
+    store_daily_synthesis,
     store_evolution_log,
     store_strategy_score,
     store_trade_log,
@@ -626,3 +628,74 @@ class TestAnalysisDataRoundTrip:
         d = {"pe_ratio": 10.0, "unknown_field": "ignored"}
         result = dict_to_analysis_data(d)
         assert result.pe_ratio == 10.0
+
+
+# -- store_daily_synthesis / fetch_daily_synthesis --
+
+class TestDailySynthesis:
+    @pytest.mark.asyncio
+    async def test_store_returns_id(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow.return_value = {"id": 5}
+        pool = _mock_pool(mock_conn)
+
+        result = await store_daily_synthesis(
+            pool, date(2026, 3, 27), "deepseek-reasoner",
+            [{"symbol": "NVDA"}], [{"symbol": "MRNA"}],
+            "moderate risk", {"AAPL": "watching"}, "raw text",
+        )
+        assert result == 5
+
+    @pytest.mark.asyncio
+    async def test_store_passes_json_args(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow.return_value = {"id": 1}
+        pool = _mock_pool(mock_conn)
+
+        buys = [{"symbol": "CRM", "score": 53.0}]
+        avoids = [{"symbol": "TSLA", "score": 3.3}]
+        notes = {"NVDA": "strong momentum"}
+
+        await store_daily_synthesis(
+            pool, date(2026, 3, 27), "deepseek-reasoner",
+            buys, avoids, "low risk", notes, "raw",
+        )
+        args = mock_conn.fetchrow.call_args[0]
+        assert args[1] == date(2026, 3, 27)
+        assert args[2] == "deepseek-reasoner"
+        # / top_buys and top_avoids are json-serialized
+        assert json.loads(args[3]) == buys
+        assert json.loads(args[4]) == avoids
+
+    @pytest.mark.asyncio
+    async def test_fetch_latest(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow.return_value = {
+            "id": 1, "date": date(2026, 3, 27),
+            "model": "deepseek-reasoner", "top_buys": "[]",
+        }
+        pool = _mock_pool(mock_conn)
+
+        result = await fetch_daily_synthesis(pool)
+        assert result is not None
+        assert result["model"] == "deepseek-reasoner"
+
+    @pytest.mark.asyncio
+    async def test_fetch_by_date(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow.return_value = {"id": 2, "date": date(2026, 3, 26)}
+        pool = _mock_pool(mock_conn)
+
+        result = await fetch_daily_synthesis(pool, target_date=date(2026, 3, 26))
+        assert result["date"] == date(2026, 3, 26)
+        args = mock_conn.fetchrow.call_args[0]
+        assert args[1] == date(2026, 3, 26)
+
+    @pytest.mark.asyncio
+    async def test_fetch_returns_none_when_empty(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow.return_value = None
+        pool = _mock_pool(mock_conn)
+
+        result = await fetch_daily_synthesis(pool)
+        assert result is None
