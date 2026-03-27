@@ -8,6 +8,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.notifications.notifier import (
+    DISCORD_CHANNELS,
     NotificationEvent,
     Severity,
     SEVERITY_COLORS,
@@ -22,8 +23,11 @@ from src.notifications.notifier import (
     buffer_error,
     notify,
     notify_async,
+    notify_analysis_highlight,
     notify_daily_digest,
+    notify_daily_synthesis,
     notify_evolution_summary,
+    notify_sentiment_shift,
     notify_strategy_promoted,
     notify_system_error,
     notify_trade_error,
@@ -265,3 +269,85 @@ class TestConvenienceHelpers:
             notify_daily_digest(97500.0, -2500.0, 8, 3)
             event = mock.call_args[0][0]
             assert "-" in event.fields["daily P&L"]
+
+
+# ---------------------------------------------------------------------------
+# / discord channel routing tests
+# ---------------------------------------------------------------------------
+
+class TestChannelRouting:
+    @pytest.mark.asyncio
+    async def test_trades_channel_uses_webhook_trades(self):
+        event = NotificationEvent(
+            severity=Severity.HIGH, title="test", message="trade", channel="trades",
+        )
+        with patch.dict(os.environ, {"DISCORD_WEBHOOK_TRADES": "https://hook/trades"}, clear=False):
+            with patch("src.notifications.notifier.api_post", new_callable=AsyncMock) as mock_post:
+                await _send_discord(event)
+                url = mock_post.call_args[0][0]
+                assert url == "https://hook/trades"
+
+    @pytest.mark.asyncio
+    async def test_analysis_channel_routing(self):
+        event = NotificationEvent(
+            severity=Severity.MEDIUM, title="test", message="analysis", channel="analysis",
+        )
+        with patch.dict(os.environ, {"DISCORD_WEBHOOK_ANALYSIS": "https://hook/analysis"}, clear=False):
+            with patch("src.notifications.notifier.api_post", new_callable=AsyncMock) as mock_post:
+                await _send_discord(event)
+                url = mock_post.call_args[0][0]
+                assert url == "https://hook/analysis"
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_default_webhook(self):
+        event = NotificationEvent(
+            severity=Severity.LOW, title="test", message="fallback", channel="trades",
+        )
+        # / no DISCORD_WEBHOOK_TRADES set, falls back to DISCORD_WEBHOOK_URL
+        env = {"DISCORD_WEBHOOK_URL": "https://hook/default"}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("src.notifications.notifier.api_post", new_callable=AsyncMock) as mock_post:
+                await _send_discord(event)
+                url = mock_post.call_args[0][0]
+                assert url == "https://hook/default"
+
+    @pytest.mark.asyncio
+    async def test_no_webhook_skips_silently(self):
+        event = NotificationEvent(
+            severity=Severity.LOW, title="test", message="skip", channel="trades",
+        )
+        with patch.dict(os.environ, {}, clear=True):
+            result = await _send_discord(event)
+            assert result is False
+
+
+# ---------------------------------------------------------------------------
+# / new notification helper tests
+# ---------------------------------------------------------------------------
+
+class TestNewNotifyHelpers:
+    def test_notify_analysis_highlight(self):
+        with patch("src.notifications.notifier.notify_async") as mock:
+            notify_analysis_highlight("NVDA", "bullish", 85.0)
+            event = mock.call_args[0][0]
+            assert event.channel == "analysis"
+            assert "NVDA" in event.title
+
+    def test_notify_sentiment_shift(self):
+        with patch("src.notifications.notifier.notify_async") as mock:
+            notify_sentiment_shift("AAPL", -0.2, 0.5)
+            event = mock.call_args[0][0]
+            assert event.channel == "sentiment"
+            assert "AAPL" in event.title
+
+    def test_notify_daily_synthesis(self):
+        with patch("src.notifications.notifier.notify_async") as mock:
+            synthesis = {
+                "top_buys": [{"symbol": "NVDA"}, {"symbol": "CRM"}],
+                "top_avoids": [{"symbol": "MRNA"}],
+                "portfolio_risk": "moderate",
+            }
+            notify_daily_synthesis(synthesis)
+            event = mock.call_args[0][0]
+            assert event.channel == "daily"
+            assert "NVDA" in event.message
