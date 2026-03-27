@@ -168,7 +168,7 @@ class TestRiskAgentApproval:
         mock_conn = AsyncMock()
         mock_conn.fetchrow.return_value = _make_signal_row(signal_type="sell")
         pool = _mock_pool(mock_conn)
-        broker = _make_broker()
+        broker = _make_broker(positions=[_make_position(symbol="AAPL")])
 
         with (
             patch("src.agents.risk_agent.tools.store_approved_trade", new_callable=AsyncMock, return_value=10),
