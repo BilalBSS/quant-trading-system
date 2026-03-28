@@ -1,13 +1,16 @@
-# / tests for social sentiment (stocktwits + fear & greed)
+# / tests for social sentiment (apewisdom + fear & greed + vix)
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.data.social_sentiment import (
+    _fetch_vix_sync,
     compute_social_score,
+    fetch_apewisdom,
     fetch_fear_greed_index,
     fetch_reddit_sentiment,
     fetch_stocktwits_sentiment,
+    fetch_vix,
     run_social_sentiment,
     store_social_sentiment,
 )
@@ -300,82 +303,321 @@ class TestRunSocialSentiment:
     @pytest.mark.asyncio
     async def test_processes_multiple_symbols(self):
         pool, conn = _mock_pool()
-        st_data = {"bullish_pct": 0.6, "bearish_pct": 0.4, "volume": 5, "raw_score": 0.2}
-        fng_data = {"raw_value": 60.0, "normalized": 0.2}
+        aw_data = {"AAPL": {"mentions": 50, "upvotes": 100, "rank": 1, "raw_score": 0.8},
+                   "MSFT": {"mentions": 30, "upvotes": 60, "rank": 3, "raw_score": 0.6}}
 
-        with patch("src.data.social_sentiment.fetch_stocktwits_sentiment", new_callable=AsyncMock, return_value=st_data):
-            with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=fng_data):
-                results = await run_social_sentiment(pool, ["AAPL", "MSFT"])
-                assert len(results) == 2
-                assert "AAPL" in results
-                assert "MSFT" in results
+        with patch("src.data.social_sentiment.fetch_apewisdom", new_callable=AsyncMock, return_value=aw_data):
+            with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=None):
+                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value=0.1):
+                    results = await run_social_sentiment(pool, ["AAPL", "MSFT"])
+                    assert len(results) == 2
+                    assert "AAPL" in results
+                    assert "MSFT" in results
 
     @pytest.mark.asyncio
-    async def test_stores_stocktwits_and_fng(self):
+    async def test_stores_apewisdom_and_vix(self):
         pool, conn = _mock_pool()
-        st_data = {"bullish_pct": 0.7, "bearish_pct": 0.3, "volume": 10, "raw_score": 0.4}
-        fng_data = {"raw_value": 50.0, "normalized": 0.0}
+        aw_data = {"AAPL": {"mentions": 40, "upvotes": 80, "rank": 2, "raw_score": 0.7}}
 
-        with patch("src.data.social_sentiment.fetch_stocktwits_sentiment", new_callable=AsyncMock, return_value=st_data):
-            with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=fng_data):
-                await run_social_sentiment(pool, ["AAPL"])
-                # / should store both stocktwits and fear_greed
-                assert conn.execute.call_count == 2
+        with patch("src.data.social_sentiment.fetch_apewisdom", new_callable=AsyncMock, return_value=aw_data):
+            with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=None):
+                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value=0.1):
+                    await run_social_sentiment(pool, ["AAPL"])
+                    # / should store both apewisdom and vix
+                    assert conn.execute.call_count == 2
 
     @pytest.mark.asyncio
     async def test_handles_fetch_failure_gracefully(self):
         pool, conn = _mock_pool()
 
-        with patch("src.data.social_sentiment.fetch_stocktwits_sentiment", new_callable=AsyncMock, return_value=None):
+        with patch("src.data.social_sentiment.fetch_apewisdom", new_callable=AsyncMock, return_value={}):
             with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=None):
-                results = await run_social_sentiment(pool, ["AAPL"])
-                assert results["AAPL"] == 0.0
+                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value=None):
+                    results = await run_social_sentiment(pool, ["AAPL"])
+                    assert results["AAPL"] == 0.0
 
     @pytest.mark.asyncio
-    async def test_continues_on_symbol_error(self):
+    async def test_symbol_not_in_apewisdom_gets_fear_gauge_only(self):
         pool, conn = _mock_pool()
 
-        call_count = 0
-
-        async def failing_then_ok(symbol):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise Exception("api down")
-            return {"bullish_pct": 0.6, "bearish_pct": 0.4, "volume": 5, "raw_score": 0.2}
-
-        with patch("src.data.social_sentiment.fetch_stocktwits_sentiment", side_effect=failing_then_ok):
+        with patch("src.data.social_sentiment.fetch_apewisdom", new_callable=AsyncMock, return_value={}):
             with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=None):
-                results = await run_social_sentiment(pool, ["BAD", "GOOD"])
-                assert results["BAD"] == 0.0
-                assert "GOOD" in results
+                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value=0.3):
+                    results = await run_social_sentiment(pool, ["AAPL"])
+                    # / no apewisdom data, vix only: 0.3
+                    assert results["AAPL"] == pytest.approx(0.3)
 
     @pytest.mark.asyncio
     async def test_empty_symbols_list(self):
         pool, conn = _mock_pool()
-        results = await run_social_sentiment(pool, [])
-        assert results == {}
+        with patch("src.data.social_sentiment.fetch_apewisdom", new_callable=AsyncMock, return_value={}):
+            with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value=None):
+                with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=None):
+                    results = await run_social_sentiment(pool, [])
+                    assert results == {}
 
     @pytest.mark.asyncio
-    async def test_fng_fetched_once(self):
+    async def test_apewisdom_fetched_once_for_stocks(self):
         pool, conn = _mock_pool()
-        st_data = {"bullish_pct": 0.5, "bearish_pct": 0.5, "volume": 1, "raw_score": 0.0}
-        fng_data = {"raw_value": 50.0, "normalized": 0.0}
+        aw_data = {"AAPL": {"mentions": 10, "upvotes": 20, "rank": 5, "raw_score": 0.4}}
 
-        with patch("src.data.social_sentiment.fetch_stocktwits_sentiment", new_callable=AsyncMock, return_value=st_data):
-            with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=fng_data) as mock_fng:
-                await run_social_sentiment(pool, ["AAPL", "MSFT", "GOOG"])
-                # / fear & greed is market-wide, fetched once not per-symbol
-                mock_fng.assert_called_once()
+        with patch("src.data.social_sentiment.fetch_apewisdom", new_callable=AsyncMock, return_value=aw_data) as mock_aw:
+            with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=None):
+                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value=None):
+                    await run_social_sentiment(pool, ["AAPL", "MSFT", "GOOG"])
+                    # / apewisdom called twice: once for all-stocks, once for all-crypto
+                    assert mock_aw.call_count == 2
 
     @pytest.mark.asyncio
     async def test_score_computation_matches(self):
         pool, conn = _mock_pool()
-        st_data = {"bullish_pct": 0.8, "bearish_pct": 0.2, "volume": 20, "raw_score": 0.6}
-        fng_data = {"raw_value": 70.0, "normalized": 0.4}
+        aw_data = {"AAPL": {"mentions": 100, "upvotes": 200, "rank": 1, "raw_score": 0.6}}
 
-        with patch("src.data.social_sentiment.fetch_stocktwits_sentiment", new_callable=AsyncMock, return_value=st_data):
+        with patch("src.data.social_sentiment.fetch_apewisdom", new_callable=AsyncMock, return_value=aw_data):
+            with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=None):
+                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value=0.4):
+                    results = await run_social_sentiment(pool, ["AAPL"])
+                    # / equity: (0.6 * 0.6 + 0.4 * 0.4) / 1.0 = 0.52
+                    assert results["AAPL"] == pytest.approx(0.52)
+
+
+# ---------------------------------------------------------------------------
+# / vix fetch tests
+# ---------------------------------------------------------------------------
+
+class TestFetchVix:
+    def test_vix_returns_normalized(self):
+        # / VIX=20 -> (30-20)/20 = 0.5
+        import pandas as pd
+        mock_hist = pd.DataFrame({"Close": [20.0]})
+        mock_ticker = MagicMock()
+        mock_ticker.history.return_value = mock_hist
+        with patch("yfinance.Ticker", return_value=mock_ticker):
+            result = _fetch_vix_sync()
+        assert result == pytest.approx(0.5)
+
+    def test_vix_extreme_high_clamped(self):
+        # / VIX=60 -> (30-60)/20 = -1.5 -> clamped to -1.0
+        import pandas as pd
+        mock_hist = pd.DataFrame({"Close": [60.0]})
+        mock_ticker = MagicMock()
+        mock_ticker.history.return_value = mock_hist
+        with patch("yfinance.Ticker", return_value=mock_ticker):
+            result = _fetch_vix_sync()
+        assert result == -1.0
+
+    def test_vix_extreme_low_clamped(self):
+        # / VIX=5 -> (30-5)/20 = 1.25 -> clamped to 1.0
+        import pandas as pd
+        mock_hist = pd.DataFrame({"Close": [5.0]})
+        mock_ticker = MagicMock()
+        mock_ticker.history.return_value = mock_hist
+        with patch("yfinance.Ticker", return_value=mock_ticker):
+            result = _fetch_vix_sync()
+        assert result == 1.0
+
+    def test_vix_empty_history_returns_none(self):
+        import pandas as pd
+        mock_ticker = MagicMock()
+        mock_ticker.history.return_value = pd.DataFrame()
+        with patch("yfinance.Ticker", return_value=mock_ticker):
+            result = _fetch_vix_sync()
+        assert result is None
+
+    def test_vix_exception_returns_none(self):
+        with patch("yfinance.Ticker", side_effect=Exception("api down")):
+            result = _fetch_vix_sync()
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_async_fetch_vix_wraps_sync(self):
+        with patch("src.data.social_sentiment._fetch_vix_sync", return_value=0.3):
+            result = await fetch_vix()
+        assert result == 0.3
+
+
+# ---------------------------------------------------------------------------
+# / apewisdom tests
+# ---------------------------------------------------------------------------
+
+class TestFetchApewisdom:
+    @pytest.mark.asyncio
+    async def test_returns_dict_keyed_by_ticker(self):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "results": [
+                {"ticker": "NVDA", "mentions": 500, "upvotes": 1000, "rank": 1},
+                {"ticker": "AAPL", "mentions": 200, "upvotes": 400, "rank": 2},
+            ]
+        }
+        with patch("src.data.social_sentiment.api_get", new_callable=AsyncMock, return_value=mock_resp):
+            result = await fetch_apewisdom("all-stocks")
+        assert "NVDA" in result
+        assert "AAPL" in result
+        assert result["NVDA"]["mentions"] == 500
+        assert result["NVDA"]["rank"] == 1
+
+    @pytest.mark.asyncio
+    async def test_score_normalized_log_scale(self):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "results": [
+                {"ticker": "TOP", "mentions": 1000, "upvotes": 2000, "rank": 1},
+                {"ticker": "MID", "mentions": 100, "upvotes": 200, "rank": 5},
+                {"ticker": "LOW", "mentions": 10, "upvotes": 20, "rank": 20},
+            ]
+        }
+        with patch("src.data.social_sentiment.api_get", new_callable=AsyncMock, return_value=mock_resp):
+            result = await fetch_apewisdom("all-stocks")
+        # / top ticker gets score ~1.0
+        assert result["TOP"]["raw_score"] == pytest.approx(1.0, abs=0.01)
+        # / lower mentions get proportionally lower scores
+        assert result["MID"]["raw_score"] < result["TOP"]["raw_score"]
+        assert result["LOW"]["raw_score"] < result["MID"]["raw_score"]
+        # / all scores between 0 and 1
+        for t in result.values():
+            assert 0.0 <= t["raw_score"] <= 1.0
+
+    @pytest.mark.asyncio
+    async def test_empty_results_returns_empty_dict(self):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"results": []}
+        with patch("src.data.social_sentiment.api_get", new_callable=AsyncMock, return_value=mock_resp):
+            result = await fetch_apewisdom("all-stocks")
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_api_error_returns_empty_dict(self):
+        with patch("src.data.social_sentiment.api_get", new_callable=AsyncMock, side_effect=Exception("timeout")):
+            result = await fetch_apewisdom("all-stocks")
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_ticker_uppercased(self):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "results": [{"ticker": "nvda", "mentions": 100, "upvotes": 200, "rank": 1}]
+        }
+        with patch("src.data.social_sentiment.api_get", new_callable=AsyncMock, return_value=mock_resp):
+            result = await fetch_apewisdom("all-stocks")
+        assert "NVDA" in result
+
+    @pytest.mark.asyncio
+    async def test_crypto_filter(self):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "results": [
+                {"ticker": "BTC", "mentions": 800, "upvotes": 1600, "rank": 1},
+                {"ticker": "ETH", "mentions": 400, "upvotes": 800, "rank": 2},
+            ]
+        }
+        with patch("src.data.social_sentiment.api_get", new_callable=AsyncMock, return_value=mock_resp) as mock_get:
+            result = await fetch_apewisdom("all-crypto")
+        assert "BTC" in result
+        assert "ETH" in result
+        url = mock_get.call_args[0][0]
+        assert "all-crypto" in url
+
+
+# ---------------------------------------------------------------------------
+# / stocktwits btc.x mapping tests (kept as fallback)
+# ---------------------------------------------------------------------------
+
+class TestStockTwitsCryptoMapping:
+    @pytest.mark.asyncio
+    async def test_btc_usd_maps_to_btc_x(self):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "symbol": {"id": 1},
+            "sentiment": {"bullish": 60, "bearish": 40},
+            "cursor": {"since": 0, "max": 0},
+            "messages": [{"id": 1}, {"id": 2}, {"id": 3}],
+        }
+        mock_client = AsyncMock()
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.__aexit__.return_value = False
+        mock_client.get.return_value = mock_response
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            await fetch_stocktwits_sentiment("BTC-USD")
+        url = mock_client.get.call_args[0][0]
+        assert "BTC.X" in url
+
+    @pytest.mark.asyncio
+    async def test_eth_usd_maps_to_eth_x(self):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "symbol": {"id": 1},
+            "sentiment": {"bullish": 50, "bearish": 50},
+            "cursor": {"since": 0, "max": 0},
+            "messages": [],
+        }
+        mock_client = AsyncMock()
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.__aexit__.return_value = False
+        mock_client.get.return_value = mock_response
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            await fetch_stocktwits_sentiment("ETH-USD")
+        url = mock_client.get.call_args[0][0]
+        assert "ETH.X" in url
+
+    @pytest.mark.asyncio
+    async def test_equity_symbol_unchanged(self):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "symbol": {"id": 1},
+            "sentiment": {"bullish": 70, "bearish": 30},
+            "cursor": {"since": 0, "max": 0},
+            "messages": [{"id": 1}],
+        }
+        mock_client = AsyncMock()
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.__aexit__.return_value = False
+        mock_client.get.return_value = mock_response
+
+        with patch("httpx.AsyncClient", return_value=mock_client):
+            await fetch_stocktwits_sentiment("AAPL")
+        url = mock_client.get.call_args[0][0]
+        assert "AAPL" in url
+        assert ".X" not in url
+
+
+# ---------------------------------------------------------------------------
+# / equity vs crypto score split
+# ---------------------------------------------------------------------------
+
+class TestScoreSplit:
+    @pytest.mark.asyncio
+    async def test_equity_uses_vix_not_fng(self):
+        pool, conn = _mock_pool()
+        aw_data = {"AAPL": {"mentions": 10, "upvotes": 20, "rank": 5, "raw_score": 0.0}}
+        fng_data = {"raw_value": 90.0, "normalized": 0.8}
+
+        with patch("src.data.social_sentiment.fetch_apewisdom", new_callable=AsyncMock, return_value=aw_data):
             with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=fng_data):
-                results = await run_social_sentiment(pool, ["AAPL"])
-                # / (0.6 * 0.6 + 0.4 * 0.4) / 1.0 = 0.52
-                assert results["AAPL"] == pytest.approx(0.52)
+                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value=-0.5):
+                    results = await run_social_sentiment(pool, ["AAPL"])
+                    # / equity: (0.0 * 0.6 + (-0.5) * 0.4) / 1.0 = -0.2
+                    assert results["AAPL"] == pytest.approx(-0.2)
+
+    @pytest.mark.asyncio
+    async def test_crypto_uses_fng_not_vix(self):
+        pool, conn = _mock_pool()
+        aw_crypto = {"BTC": {"mentions": 10, "upvotes": 20, "rank": 5, "raw_score": 0.0}}
+        fng_data = {"raw_value": 90.0, "normalized": 0.8}
+
+        async def aw_side_effect(filter_type):
+            if filter_type == "all-crypto":
+                return aw_crypto
+            return {}
+
+        with patch("src.data.social_sentiment.fetch_apewisdom", side_effect=aw_side_effect):
+            with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=fng_data):
+                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value=-0.5):
+                    results = await run_social_sentiment(pool, ["BTC-USD"])
+                    # / crypto: (0.0 * 0.6 + 0.8 * 0.4) / 1.0 = 0.32
+                    assert results["BTC-USD"] == pytest.approx(0.32)

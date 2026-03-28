@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-import json
+
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -47,7 +47,7 @@ async def store_analysis_score(
             Decimal(str(composite_score)) if composite_score is not None else None,
             regime, Decimal(str(regime_confidence)) if regime_confidence is not None else None,
             used_fundamentals,
-            json.dumps(details) if details else None,
+            details if details else None,
         )
         return row["id"]
 
@@ -77,7 +77,7 @@ async def store_trade_signal(
             RETURNING id""",
             strategy_id, symbol, signal_type,
             Decimal(str(strength)), regime,
-            json.dumps(details) if details else None,
+            details if details else None,
         )
         return row["id"]
 
@@ -151,7 +151,7 @@ async def store_trade_log(
             order_id, broker, regime,
             Decimal(str(pnl)) if pnl is not None else None,
             strategy_id,
-            json.dumps(details) if details else None,
+            details if details else None,
         )
         return row["id"]
 
@@ -175,7 +175,7 @@ async def store_strategy_score(
             Decimal(str(win_rate)),
             Decimal(str(brier_score)) if brier_score is not None else None,
             total_trades,
-            json.dumps(regime_breakdown) if regime_breakdown else None,
+            regime_breakdown if regime_breakdown else None,
         )
         return row["id"]
 
@@ -200,7 +200,7 @@ async def store_evolution_log(
             VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id""",
             generation, action, strategy_id, parent_id, reason,
-            json.dumps(details) if details else None,
+            details if details else None,
         )
         return row["id"]
 
@@ -231,9 +231,9 @@ async def store_crypto_onchain(
     async with pool.acquire() as conn:
         await conn.execute(
             """INSERT INTO crypto_onchain (symbol, date, data_type, chain, data, source)
-            VALUES ($1, CURRENT_DATE, $2, $3, $4::jsonb, $5)
+            VALUES ($1, CURRENT_DATE, $2, $3, $4, $5)
             ON CONFLICT DO NOTHING""",
-            symbol, data_type, chain, json.dumps(data), source,
+            symbol, data_type, chain, data, source,
         )
 
 
@@ -285,3 +285,133 @@ def dict_to_analysis_data(d: dict) -> AnalysisData:
         news_sentiment_score=d.get("news_sentiment_score"),
         ai_consensus=d.get("ai_consensus"),
     )
+
+
+# / --- sector + symbol profile helpers ---
+
+async def store_sector_profile(
+    pool, sector: str, date, best_indicators: dict | None,
+    best_fundamentals: dict | None, avg_sharpe: float, avg_win_rate: float,
+    total_trades: int,
+) -> int:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO sector_profiles (sector, date, best_indicators, best_fundamentals,
+                avg_sharpe, avg_win_rate, total_trades)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (sector, date) DO UPDATE SET
+                best_indicators = EXCLUDED.best_indicators,
+                best_fundamentals = EXCLUDED.best_fundamentals,
+                avg_sharpe = EXCLUDED.avg_sharpe,
+                avg_win_rate = EXCLUDED.avg_win_rate,
+                total_trades = EXCLUDED.total_trades
+            RETURNING id""",
+            sector, date,
+            best_indicators if best_indicators else None,
+            best_fundamentals if best_fundamentals else None,
+            avg_sharpe, avg_win_rate, total_trades,
+        )
+        return row["id"]
+
+
+async def fetch_sector_profile(pool, sector: str) -> dict | None:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT * FROM sector_profiles
+            WHERE sector = $1 ORDER BY date DESC LIMIT 1""",
+            sector,
+        )
+        return dict(row) if row else None
+
+
+async def store_symbol_profile(
+    pool, symbol: str, sector: str | None, date,
+    tier: str, parameter_overrides: dict | None,
+    avg_sharpe: float, total_trades: int,
+) -> int:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO symbol_profiles (symbol, sector, date, tier,
+                parameter_overrides, avg_sharpe, total_trades)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (symbol, date) DO UPDATE SET
+                sector = EXCLUDED.sector, tier = EXCLUDED.tier,
+                parameter_overrides = EXCLUDED.parameter_overrides,
+                avg_sharpe = EXCLUDED.avg_sharpe,
+                total_trades = EXCLUDED.total_trades
+            RETURNING id""",
+            symbol, sector, date, tier,
+            parameter_overrides if parameter_overrides else None,
+            avg_sharpe, total_trades,
+        )
+        return row["id"]
+
+
+async def fetch_symbol_profile(pool, symbol: str) -> dict | None:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT * FROM symbol_profiles
+            WHERE symbol = $1 ORDER BY date DESC LIMIT 1""",
+            symbol,
+        )
+        return dict(row) if row else None
+
+
+async def count_symbol_trades(pool, strategy_id: str, symbol: str) -> int:
+    # / count trades for a specific strategy + symbol combo
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT COUNT(*) as cnt FROM trade_log
+            WHERE strategy_id = $1 AND symbol = $2""",
+            strategy_id, symbol,
+        )
+        return int(row["cnt"]) if row else 0
+
+
+async def store_daily_synthesis(
+    pool, date, model: str, top_buys: list | None,
+    top_avoids: list | None, portfolio_risk: str | None,
+    per_symbol_notes: dict | None, raw_response: str | None,
+) -> int:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO daily_synthesis (date, model, top_buys, top_avoids,
+                portfolio_risk, per_symbol_notes, raw_response)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (date) DO UPDATE SET
+                model = EXCLUDED.model, top_buys = EXCLUDED.top_buys,
+                top_avoids = EXCLUDED.top_avoids, portfolio_risk = EXCLUDED.portfolio_risk,
+                per_symbol_notes = EXCLUDED.per_symbol_notes, raw_response = EXCLUDED.raw_response
+            RETURNING id""",
+            date, model,
+            top_buys if top_buys else None,
+            top_avoids if top_avoids else None,
+            portfolio_risk,
+            per_symbol_notes if per_symbol_notes else None,
+            raw_response,
+        )
+        return row["id"]
+
+
+async def fetch_daily_synthesis(pool, target_date=None) -> dict | None:
+    async with pool.acquire() as conn:
+        if target_date:
+            row = await conn.fetchrow(
+                "SELECT * FROM daily_synthesis WHERE date = $1", target_date,
+            )
+        else:
+            row = await conn.fetchrow(
+                "SELECT * FROM daily_synthesis ORDER BY date DESC LIMIT 1",
+            )
+        return dict(row) if row else None
+
+
+async def count_all_symbol_trades(pool, symbol: str) -> int:
+    # / count ALL trades for a symbol across all strategies
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT COUNT(*) as cnt FROM trade_log
+            WHERE symbol = $1""",
+            symbol,
+        )
+        return int(row["cnt"]) if row else 0

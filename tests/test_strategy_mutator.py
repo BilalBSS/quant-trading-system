@@ -114,11 +114,14 @@ class TestMutateWithLLM:
                     rng=np.random.default_rng(42),
                 )
 
-        assert result["created_by"] == "evolution_agent"
-        assert result["parent_id"] == "strategy_killed"
-        assert result["metadata"]["status"] == "backtest_pending"
-        assert result["metadata"]["generation"] == 3  # / killed was gen 2, so 2+1=3
-        assert result["id"].startswith("strategy_")
+        assert isinstance(result, list)
+        assert len(result) >= 1
+        r = result[0]
+        assert r["created_by"] == "evolution_agent"
+        assert r["parent_id"] == "strategy_killed"
+        assert r["metadata"]["status"] == "backtest_pending"
+        assert r["metadata"]["generation"] == 3  # / killed was gen 2, so 2+1=3
+        assert r["id"].startswith("strategy_")
 
     @pytest.mark.asyncio
     async def test_mutate_retries_on_invalid_json(self):
@@ -140,7 +143,7 @@ class TestMutateWithLLM:
                 )
 
         assert call_count == 3
-        assert result["created_by"] == "evolution_agent"
+        assert result[0]["created_by"] == "evolution_agent"
 
     @pytest.mark.asyncio
     async def test_mutate_all_retries_fail_falls_back(self):
@@ -154,8 +157,8 @@ class TestMutateWithLLM:
                 )
 
         # / should fall back to random_tweak
-        assert result["created_by"] == "random_mutation"
-        assert result["parent_id"] == "strategy_killed"
+        assert result[0]["created_by"] == "random_mutation"
+        assert result[0]["parent_id"] == "strategy_killed"
         assert mock_haiku.call_count == 3
 
     @pytest.mark.asyncio
@@ -169,8 +172,8 @@ class TestMutateWithLLM:
                 rng=np.random.default_rng(42),
             )
 
-        assert result["created_by"] == "random_mutation"
-        assert result["parent_id"] == "strategy_killed"
+        assert result[0]["created_by"] == "random_mutation"
+        assert result[0]["parent_id"] == "strategy_killed"
 
 
 # ────────────────────────────────────────────────────────────────
