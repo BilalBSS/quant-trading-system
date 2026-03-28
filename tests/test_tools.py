@@ -94,7 +94,7 @@ class TestStoreAnalysisScore:
         assert isinstance(args[7], Decimal)
 
     @pytest.mark.asyncio
-    async def test_json_dumps_details(self):
+    async def test_passes_details_dict(self):
         mock_conn = AsyncMock()
         mock_conn.fetchrow.return_value = {"id": 1}
         pool = _mock_pool(mock_conn)
@@ -105,7 +105,8 @@ class TestStoreAnalysisScore:
             None, None, True, details,
         )
         args = mock_conn.fetchrow.call_args[0]
-        assert args[9] == json.dumps(details)
+        # / raw dict passed to asyncpg, codec handles serialization
+        assert args[9] == details
 
     @pytest.mark.asyncio
     async def test_none_details_passes_none(self):
@@ -201,7 +202,7 @@ class TestStoreTradeSignal:
         details = {"reason": "oversold"}
         await store_trade_signal(pool, "s1", "X", "buy", 0.5, None, details)
         args = mock_conn.fetchrow.call_args[0]
-        assert args[6] == json.dumps(details)
+        assert args[6] == details
 
     @pytest.mark.asyncio
     async def test_sql_has_pending_status(self):
@@ -403,7 +404,7 @@ class TestStoreTradeLog:
             details=details,
         )
         args = mock_conn.fetchrow.call_args[0]
-        assert args[11] == json.dumps(details)
+        assert args[11] == details
 
 
 # -- store_strategy_score --
@@ -462,7 +463,7 @@ class TestStoreStrategyScore:
             1.0, -0.05, 0.50, None, 10, breakdown,
         )
         args = mock_conn.fetchrow.call_args[0]
-        assert args[9] == json.dumps(breakdown)
+        assert args[9] == breakdown
 
 
 # -- fetch_strategy_scores --
@@ -516,7 +517,7 @@ class TestStoreEvolutionLog:
             pool, 1, "mutate", "s2", "s1", "low sharpe", details,
         )
         args = mock_conn.fetchrow.call_args[0]
-        assert args[6] == json.dumps(details)
+        assert args[6] == details
 
 
 # -- fetch_recent_trades --
@@ -664,8 +665,9 @@ class TestDailySynthesis:
         assert args[1] == date(2026, 3, 27)
         assert args[2] == "deepseek-reasoner"
         # / top_buys and top_avoids are json-serialized
-        assert json.loads(args[3]) == buys
-        assert json.loads(args[4]) == avoids
+        # / raw lists passed to asyncpg, codec handles serialization
+        assert args[3] == buys
+        assert args[4] == avoids
 
     @pytest.mark.asyncio
     async def test_fetch_latest(self):
