@@ -457,9 +457,9 @@ class TestNotifyStrategyEvaluation:
             notify_strategy_evaluation(stats)
             event = mock.call_args[0][0]
             assert event.channel == "strategy"
-            assert "350 pairs" in event.message
+            assert "7 strategies" in event.message
+            assert "2/350 triggered" in event.message
             assert "PLTR" in event.message
-            assert "signals: 2" in event.message
 
     def test_empty_cycle(self):
         from src.notifications.notifier import notify_strategy_evaluation
@@ -471,7 +471,7 @@ class TestNotifyStrategyEvaluation:
             }
             notify_strategy_evaluation(stats)
             event = mock.call_args[0][0]
-            assert "0 pairs" in event.message
+            assert "0/0 triggered" in event.message
             assert "near-misses" not in event.message
 
     def test_no_near_misses(self):
