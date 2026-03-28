@@ -28,6 +28,7 @@ from src.notifications.notifier import (
     notify_daily_synthesis,
     notify_evolution_summary,
     notify_sentiment_shift,
+    notify_strategy_evaluation,
     notify_strategy_promoted,
     notify_system_error,
     notify_trade_error,
@@ -333,12 +334,57 @@ class TestNewNotifyHelpers:
             assert event.channel == "analysis"
             assert "NVDA" in event.title
 
+    def test_notify_analysis_highlight_with_details(self):
+        with patch("src.notifications.notifier.notify_async") as mock:
+            details = {
+                "pe_ratio": 32.1, "dcf_upside": 0.24,
+                "earnings_surprise_pct": 0.082, "consecutive_beats": 3,
+                "insider_signal": "net buying", "regime": "bull",
+                "ai_excerpt": "Strong fundamentals with accelerating revenue growth.",
+            }
+            notify_analysis_highlight("NVDA", "bullish", 85.0, details=details)
+            event = mock.call_args[0][0]
+            assert "Strong fundamentals" in event.message
+            assert "P/E" in event.fields
+            assert "DCF upside" in event.fields
+            assert "regime" in event.fields
+
+    def test_notify_analysis_highlight_partial_details(self):
+        with patch("src.notifications.notifier.notify_async") as mock:
+            details = {"pe_ratio": 15.0, "regime": "bear"}
+            notify_analysis_highlight("AAPL", "bearish", 30.0, details=details)
+            event = mock.call_args[0][0]
+            assert "P/E" in event.fields
+            assert "regime" in event.fields
+            assert "DCF upside" not in event.fields  # / not provided
+
+    def test_notify_analysis_highlight_ai_excerpt_truncated(self):
+        with patch("src.notifications.notifier.notify_async") as mock:
+            long_text = "A" * 300
+            details = {"ai_excerpt": long_text}
+            notify_analysis_highlight("X", "neutral", 50.0, details=details)
+            event = mock.call_args[0][0]
+            assert len(event.message) < 350  # / description includes score line too
+
+    def test_notify_analysis_highlight_no_details_backward_compat(self):
+        with patch("src.notifications.notifier.notify_async") as mock:
+            notify_analysis_highlight("MSFT", "bullish", 70.0)
+            event = mock.call_args[0][0]
+            assert "composite score: 70.0" in event.message
+            assert event.fields == {}
+
     def test_notify_sentiment_shift(self):
         with patch("src.notifications.notifier.notify_async") as mock:
             notify_sentiment_shift("AAPL", -0.2, 0.5)
             event = mock.call_args[0][0]
             assert event.channel == "sentiment"
             assert "AAPL" in event.title
+
+    def test_notify_sentiment_shift_with_context(self):
+        with patch("src.notifications.notifier.notify_async") as mock:
+            notify_sentiment_shift("SPY", -0.3, 0.2, context={"vix_level": 22.5})
+            event = mock.call_args[0][0]
+            assert "VIX" in event.fields
 
     def test_notify_daily_synthesis(self):
         with patch("src.notifications.notifier.notify_async") as mock:
@@ -351,3 +397,91 @@ class TestNewNotifyHelpers:
             event = mock.call_args[0][0]
             assert event.channel == "daily"
             assert "NVDA" in event.message
+
+    def test_notify_daily_synthesis_with_portfolio(self):
+        with patch("src.notifications.notifier.notify_async") as mock:
+            synthesis = {
+                "top_buys": [{"symbol": "NVDA"}],
+                "top_avoids": [],
+                "portfolio_risk": "low",
+            }
+            portfolio = {"value": 102450.0, "daily_pnl": 2450.0, "positions": 3, "strategies": 7}
+            notify_daily_synthesis(synthesis, portfolio=portfolio)
+            event = mock.call_args[0][0]
+            assert "$102,450.00" in event.message
+            assert "positions: 3" in event.message
+
+    def test_notify_daily_synthesis_zero_portfolio(self):
+        with patch("src.notifications.notifier.notify_async") as mock:
+            synthesis = {"top_buys": [], "top_avoids": [], "portfolio_risk": "unknown"}
+            portfolio = {"value": 100000.0, "daily_pnl": 0, "positions": 0, "strategies": 7}
+            notify_daily_synthesis(synthesis, portfolio=portfolio)
+            event = mock.call_args[0][0]
+            assert "positions: 0" in event.message
+
+    def test_notify_trade_executed_with_details(self):
+        with patch("src.notifications.notifier.notify_async") as mock:
+            details = {"reasons": ["rsi_oversold", "bollinger_break"], "score": 82.5, "consensus": "bullish"}
+            notify_trade_executed("AAPL", "buy", 10.0, 182.40, "strat_001", details=details)
+            event = mock.call_args[0][0]
+            assert "rsi_oversold" in event.fields.get("reasons", "")
+            assert event.fields["score"] == "82.5"
+            assert event.fields["consensus"] == "bullish"
+
+    def test_notify_strategy_promoted_with_details(self):
+        with patch("src.notifications.notifier.notify_async") as mock:
+            details = {"win_rate": 0.62, "max_drawdown": -0.08}
+            notify_strategy_promoted("strat_005", 1.3, 14, details=details)
+            event = mock.call_args[0][0]
+            assert "win rate" in event.fields
+            assert "max DD" in event.fields
+
+
+# ---------------------------------------------------------------------------
+# / strategy evaluation notification
+# ---------------------------------------------------------------------------
+
+class TestNotifyStrategyEvaluation:
+    def test_normal_stats(self):
+        from src.notifications.notifier import notify_strategy_evaluation
+        with patch("src.notifications.notifier.notify_async") as mock:
+            stats = {
+                "total": 350, "insufficient_data": 5, "no_entry": 320,
+                "blocked_consensus": 15, "blocked_threshold": 8,
+                "signals": 2, "strategies_evaluated": 7,
+                "near_misses": [
+                    {"symbol": "PLTR", "raw_strength": 0.28, "block_reason": "threshold (0.28 < 0.3)"},
+                    {"symbol": "CRM", "raw_strength": 0.25, "block_reason": "bearish consensus"},
+                ],
+            }
+            notify_strategy_evaluation(stats)
+            event = mock.call_args[0][0]
+            assert event.channel == "strategy"
+            assert "350 pairs" in event.message
+            assert "PLTR" in event.message
+            assert "signals: 2" in event.message
+
+    def test_empty_cycle(self):
+        from src.notifications.notifier import notify_strategy_evaluation
+        with patch("src.notifications.notifier.notify_async") as mock:
+            stats = {
+                "total": 0, "insufficient_data": 0, "no_entry": 0,
+                "blocked_consensus": 0, "blocked_threshold": 0,
+                "signals": 0, "strategies_evaluated": 0, "near_misses": [],
+            }
+            notify_strategy_evaluation(stats)
+            event = mock.call_args[0][0]
+            assert "0 pairs" in event.message
+            assert "near-misses" not in event.message
+
+    def test_no_near_misses(self):
+        from src.notifications.notifier import notify_strategy_evaluation
+        with patch("src.notifications.notifier.notify_async") as mock:
+            stats = {
+                "total": 100, "insufficient_data": 100, "no_entry": 0,
+                "blocked_consensus": 0, "blocked_threshold": 0,
+                "signals": 0, "strategies_evaluated": 2, "near_misses": [],
+            }
+            notify_strategy_evaluation(stats)
+            event = mock.call_args[0][0]
+            assert "near-misses" not in event.message

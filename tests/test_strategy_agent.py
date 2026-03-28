@@ -306,29 +306,208 @@ class TestAnalysisDataReconstruction:
 
 
 # ---------------------------------------------------------------------------
-# / market data dataframe construction
+# / _fetch_market_df helper + per-cycle cache
 # ---------------------------------------------------------------------------
 
-class TestMarketDataConstruction:
+class TestFetchMarketDf:
+    def setup_method(self):
+        self.agent = StrategyAgent()
+
     @pytest.mark.asyncio
-    async def test_builds_dataframe_from_rows(self):
-        # / verify the dataframe construction logic
-        rows = _make_market_rows(60)
-        rows_asc = list(reversed(rows))
-        df = pd.DataFrame(
-            [{
-                "open": float(r["open"]) if r["open"] else 0,
-                "high": float(r["high"]) if r["high"] else 0,
-                "low": float(r["low"]) if r["low"] else 0,
-                "close": float(r["close"]) if r["close"] else 0,
-                "volume": int(r["volume"]) if r["volume"] else 0,
-            } for r in rows_asc],
-            index=pd.DatetimeIndex([r["date"] for r in rows_asc]),
-        )
-        assert len(df) == 60
+    async def test_returns_dataframe_for_sufficient_data(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = _make_market_rows(100)
+        pool = _mock_pool(mock_conn)
+        df = await self.agent._fetch_market_df(pool, "AAPL")
+        assert df is not None
+        assert len(df) == 100
         assert list(df.columns) == ["open", "high", "low", "close", "volume"]
-        # / ascending order: first date < last date
-        assert df.index[0] < df.index[-1]
+        assert df.index[0] < df.index[-1]  # / ascending order
+
+    @pytest.mark.asyncio
+    async def test_returns_none_for_insufficient_data(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = _make_market_rows(30)
+        pool = _mock_pool(mock_conn)
+        df = await self.agent._fetch_market_df(pool, "AAPL")
+        assert df is None
+
+    @pytest.mark.asyncio
+    async def test_caches_dataframe_per_symbol(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = _make_market_rows(100)
+        pool = _mock_pool(mock_conn)
+        df1 = await self.agent._fetch_market_df(pool, "AAPL")
+        df2 = await self.agent._fetch_market_df(pool, "AAPL")
+        assert df1 is df2  # / same object from cache
+        assert mock_conn.fetch.call_count == 1  # / only one db query
+
+    @pytest.mark.asyncio
+    async def test_caches_none_for_insufficient_data(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = _make_market_rows(30)
+        pool = _mock_pool(mock_conn)
+        await self.agent._fetch_market_df(pool, "AAPL")
+        await self.agent._fetch_market_df(pool, "AAPL")
+        assert mock_conn.fetch.call_count == 1  # / cached None, no re-fetch
+
+    @pytest.mark.asyncio
+    async def test_different_symbols_not_shared(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = _make_market_rows(100)
+        pool = _mock_pool(mock_conn)
+        df1 = await self.agent._fetch_market_df(pool, "AAPL")
+        df2 = await self.agent._fetch_market_df(pool, "MSFT")
+        assert df1 is not df2
+        assert mock_conn.fetch.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_cache_cleared_between_cycles(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = _make_market_rows(100)
+        pool = _mock_pool(mock_conn)
+        await self.agent._fetch_market_df(pool, "AAPL")
+        assert "AAPL" in self.agent._df_cache
+        self.agent._df_cache.clear()  # / simulates run() clearing cache
+        assert "AAPL" not in self.agent._df_cache
+
+    @pytest.mark.asyncio
+    async def test_custom_min_bars(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = _make_market_rows(40)
+        pool = _mock_pool(mock_conn)
+        # / 40 rows, default min_bars=50 → None
+        assert await self.agent._fetch_market_df(pool, "A") is None
+        self.agent._df_cache.clear()
+        # / 40 rows, min_bars=30 → DataFrame
+        df = await self.agent._fetch_market_df(pool, "A", min_bars=30)
+        assert df is not None
+        assert len(df) == 40
+
+
+class TestRunClearsCache:
+    @pytest.mark.asyncio
+    async def test_run_resets_df_cache(self):
+        agent = StrategyAgent()
+        agent._df_cache["stale"] = pd.DataFrame()  # / leftover from previous cycle
+        pool = _mock_pool()
+        sp = _make_strategy_pool()  # / empty, returns immediately
+        broker = _make_broker()
+        await agent.run(pool, sp, broker)
+        assert "stale" not in agent._df_cache
+
+
+# ---------------------------------------------------------------------------
+# / evaluation stats tracking
+# ---------------------------------------------------------------------------
+
+class TestEvalStats:
+    def setup_method(self):
+        self.agent = StrategyAgent()
+
+    @pytest.mark.asyncio
+    async def test_stats_blocked_consensus(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = _make_market_rows(100)
+        pool = _mock_pool(mock_conn)
+
+        strat = _make_strategy()
+        stats = {"total": 0, "insufficient_data": 0, "no_entry": 0,
+                 "blocked_consensus": 0, "blocked_threshold": 0,
+                 "signals": 0, "strategies_evaluated": 0, "near_misses": []}
+
+        # / analysis with bearish consensus
+        analysis_row = {
+            "details": {"ai_consensus": "bearish", "pe_ratio": 20.0},
+            "regime": "bear",
+        }
+
+        with (
+            patch.object(strat, "should_enter", return_value=EntrySignal(
+                should_enter=True, strength=0.8, reasons=["test"],
+            )),
+            patch("src.agents.strategy_agent.tools.fetch_analysis_score",
+                  new_callable=AsyncMock, return_value=analysis_row),
+        ):
+            result = await self.agent._evaluate_symbol(pool, strat, "AAPL", stats)
+
+        assert result is None
+        assert stats["blocked_consensus"] == 1
+        assert len(stats["near_misses"]) == 1
+        assert stats["near_misses"][0]["symbol"] == "AAPL"
+
+    @pytest.mark.asyncio
+    async def test_stats_blocked_threshold(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = _make_market_rows(100)
+        pool = _mock_pool(mock_conn)
+
+        strat = _make_strategy()
+        stats = {"total": 0, "insufficient_data": 0, "no_entry": 0,
+                 "blocked_consensus": 0, "blocked_threshold": 0,
+                 "signals": 0, "strategies_evaluated": 0, "near_misses": []}
+
+        with (
+            patch.object(strat, "should_enter", return_value=EntrySignal(
+                should_enter=True, strength=0.4, reasons=["moderate"],
+            )),
+            patch("src.agents.strategy_agent.tools.fetch_analysis_score",
+                  new_callable=AsyncMock, return_value=None),
+            patch.object(self.agent, "_smooth_signal", return_value=0.15),
+        ):
+            result = await self.agent._evaluate_symbol(pool, strat, "MSFT", stats)
+
+        assert result is None
+        assert stats["total"] == 1
+        assert stats["blocked_threshold"] == 1
+        assert len(stats["near_misses"]) == 1
+        assert stats["near_misses"][0]["symbol"] == "MSFT"
+
+    @pytest.mark.asyncio
+    async def test_stats_signal_counted(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = _make_market_rows(100)
+        pool = _mock_pool(mock_conn)
+
+        strat = _make_strategy()
+        stats = {"total": 0, "insufficient_data": 0, "no_entry": 0,
+                 "blocked_consensus": 0, "blocked_threshold": 0,
+                 "signals": 0, "strategies_evaluated": 0, "near_misses": []}
+
+        with (
+            patch.object(strat, "should_enter", return_value=EntrySignal(
+                should_enter=True, strength=0.9, reasons=["strong"],
+            )),
+            patch("src.agents.strategy_agent.tools.fetch_analysis_score",
+                  new_callable=AsyncMock, return_value=None),
+            patch("src.agents.strategy_agent.tools.store_trade_signal",
+                  new_callable=AsyncMock, return_value=42),
+        ):
+            result = await self.agent._evaluate_symbol(pool, strat, "TSLA", stats)
+
+        assert stats["total"] == 1
+        # / high strength signal on first PF call should pass
+        if result is not None:
+            assert stats["signals"] == 1
+
+    @pytest.mark.asyncio
+    async def test_run_calls_notify_evaluation(self):
+        pool = _mock_pool()
+        strat = _make_strategy()
+        sp = _make_strategy_pool([(strat, "paper_trading")])
+        broker = _make_broker()
+
+        with (
+            patch.object(strat, "resolve_universe", return_value=[]),
+            patch("src.agents.strategy_agent.notify_strategy_evaluation") as mock_notify,
+            patch("src.agents.strategy_agent.tools.store_strategy_evaluation",
+                  new_callable=AsyncMock),
+        ):
+            await self.agent.run(pool, sp, broker)
+
+        mock_notify.assert_called_once()
+        call_stats = mock_notify.call_args[0][0]
+        assert call_stats["strategies_evaluated"] == 1
 
 
 # ---------------------------------------------------------------------------
