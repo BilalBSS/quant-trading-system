@@ -12,6 +12,8 @@ from src.data.fundamentals import (
     _compute_fcf_margin,
     _compute_sector_averages,
     _safe_decimal,
+    _xbrl_fact,
+    _xbrl_sum,
     fetch_all_fundamentals,
     fetch_fundamentals,
     store_fundamentals,
@@ -354,3 +356,71 @@ class TestStoreFundamentals:
         sql = call_args[0][0]
         assert "ON CONFLICT" in sql
         assert "DO UPDATE" in sql
+
+
+class TestXbrlFact:
+    def test_returns_value_for_known_concept(self):
+        mock_facts = MagicMock()
+        mock_val = MagicMock()
+        mock_val.value = 5_000_000.0
+        mock_facts.get.side_effect = lambda k: mock_val if k == "us-gaap:CashAndCashEquivalentsAtCarryingValue" else None
+        result = _xbrl_fact(mock_facts, ["CashAndCashEquivalentsAtCarryingValue"])
+        assert result == 5_000_000.0
+
+    def test_falls_through_to_second_concept(self):
+        mock_facts = MagicMock()
+        mock_val = MagicMock()
+        mock_val.value = 3_000_000.0
+        mock_facts.get.side_effect = lambda k: mock_val if "ShortTerm" in k else None
+        result = _xbrl_fact(mock_facts, ["LongTermDebt", "ShortTermBorrowings"])
+        assert result == 3_000_000.0
+
+    def test_returns_none_when_no_concepts_match(self):
+        mock_facts = MagicMock()
+        mock_facts.get.return_value = None
+        result = _xbrl_fact(mock_facts, ["FakeConceptA", "FakeConceptB"])
+        assert result is None
+
+    def test_returns_none_for_none_facts(self):
+        assert _xbrl_fact(None, ["Anything"]) is None
+
+
+class TestXbrlSum:
+    def test_sums_multiple_concepts(self):
+        mock_facts = MagicMock()
+        def getter(k):
+            m = MagicMock()
+            if "LongTermDebt" in k:
+                m.value = 10_000.0
+                return m
+            if "ShortTermBorrowings" in k:
+                m.value = 5_000.0
+                return m
+            return None
+        mock_facts.get.side_effect = getter
+        result = _xbrl_sum(mock_facts, [["LongTermDebt", "ShortTermBorrowings"]])
+        assert result == 15_000.0
+
+    def test_falls_to_second_group(self):
+        mock_facts = MagicMock()
+        def getter(k):
+            m = MagicMock()
+            if "LongTermDebtNoncurrent" in k:
+                m.value = 8_000.0
+                return m
+            if "DebtCurrent" in k:
+                m.value = 2_000.0
+                return m
+            return None
+        mock_facts.get.side_effect = getter
+        result = _xbrl_sum(mock_facts, [
+            ["LongTermDebt", "ShortTermBorrowings"],
+            ["LongTermDebtNoncurrent", "DebtCurrent"],
+        ])
+        assert result == 10_000.0
+
+    def test_returns_none_when_no_group_complete(self):
+        mock_facts = MagicMock()
+        mock_facts.get.return_value = None
+        result = _xbrl_sum(mock_facts, [["A", "B"], ["C", "D"]])
+        assert result is None

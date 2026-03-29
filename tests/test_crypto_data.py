@@ -7,6 +7,7 @@ from src.data.crypto_data import (
     _cg_id,
     fetch_coin_data,
     fetch_coin_market_chart,
+    fetch_coin_ohlc,
     fetch_defi_tvl,
     fetch_dex_volume,
     fetch_stablecoin_supply,
@@ -113,3 +114,36 @@ class TestDefiLlama:
         with patch("src.data.crypto_data.api_get", new_callable=AsyncMock, return_value=mock_resp):
             result = await fetch_stablecoin_supply()
             assert "peggedAssets" in result
+
+
+class TestFetchCoinOhlc:
+    @pytest.mark.asyncio
+    async def test_returns_candles(self):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = [
+            [1700000000000, 35000.0, 35500.0, 34800.0, 35200.0],
+            [1700014400000, 35200.0, 35800.0, 35100.0, 35600.0],
+        ]
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("src.data.crypto_data.api_get", new_callable=AsyncMock, return_value=mock_resp):
+            result = await fetch_coin_ohlc("BTC-USD", days=7)
+            assert result is not None
+            assert len(result) == 2
+            assert result[0]["open"] == 35000.0
+            assert result[1]["close"] == 35600.0
+
+    @pytest.mark.asyncio
+    async def test_unknown_symbol_returns_none(self):
+        result = await fetch_coin_ohlc("UNKNOWN-USD")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_non_list_response_returns_none(self):
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"error": "rate limit"}
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("src.data.crypto_data.api_get", new_callable=AsyncMock, return_value=mock_resp):
+            result = await fetch_coin_ohlc("ETH-USD")
+            assert result is None

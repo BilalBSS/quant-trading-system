@@ -16,6 +16,7 @@ from src.data.market_data import (
     fetch_bars_yfinance,
     fetch_latest_quote,
     store_bars,
+    store_intraday_bars,
     backfill,
 )
 
@@ -457,3 +458,62 @@ class TestFetchLatestQuote:
             result = await fetch_latest_quote("BTC-USD")
             assert result["symbol"] == "BTC-USD"
             assert result["price"] == Decimal("42000.50")
+
+
+class TestParseBarTimestamp:
+    def test_parse_bar_includes_timestamp(self):
+        bar = {"t": "2024-03-15T14:00:00Z", "o": 150, "h": 155, "l": 148, "c": 152, "v": 1000}
+        result = _parse_bar("AAPL", bar)
+        assert result["timestamp"] is not None
+        assert result["timestamp"].year == 2024
+        assert result["timestamp"].hour == 14
+
+    def test_timestamp_and_date_consistent(self):
+        bar = {"t": "2024-06-20T10:00:00Z", "o": 100, "h": 105, "l": 98, "c": 103, "v": 500}
+        result = _parse_bar("MSFT", bar)
+        assert result["date"] == result["timestamp"].date()
+
+
+class TestStoreIntradayBars:
+    @pytest.mark.asyncio
+    async def test_stores_bars_with_upsert(self):
+        from datetime import datetime, timezone
+        bars = [{
+            "symbol": "AAPL",
+            "timestamp": datetime(2024, 3, 15, 14, 0, tzinfo=timezone.utc),
+            "open": Decimal("150.00"), "high": Decimal("155.00"),
+            "low": Decimal("148.00"), "close": Decimal("152.00"),
+            "volume": 10000, "vwap": Decimal("151.50"),
+        }]
+        mock_conn = AsyncMock()
+        pool = _mock_pool(mock_conn)
+        count = await store_intraday_bars(pool, bars, timeframe="2Hour")
+        assert count == 1
+        sql = mock_conn.execute.call_args[0][0]
+        assert "market_data_intraday" in sql
+        assert "ON CONFLICT" in sql
+
+    @pytest.mark.asyncio
+    async def test_empty_bars_returns_zero(self):
+        mock_conn = AsyncMock()
+        pool = _mock_pool(mock_conn)
+        count = await store_intraday_bars(pool, [])
+        assert count == 0
+        mock_conn.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_continues_on_insert_error(self):
+        from datetime import datetime, timezone
+        bars = [
+            {"symbol": "AAPL", "timestamp": datetime(2024, 3, 15, 14, 0, tzinfo=timezone.utc),
+             "open": Decimal("150"), "high": Decimal("155"), "low": Decimal("148"),
+             "close": Decimal("152"), "volume": 1000, "vwap": None},
+            {"symbol": "AAPL", "timestamp": datetime(2024, 3, 15, 16, 0, tzinfo=timezone.utc),
+             "open": Decimal("152"), "high": Decimal("157"), "low": Decimal("150"),
+             "close": Decimal("155"), "volume": 2000, "vwap": None},
+        ]
+        mock_conn = AsyncMock()
+        mock_conn.execute.side_effect = [Exception("db error"), None]
+        pool = _mock_pool(mock_conn)
+        count = await store_intraday_bars(pool, bars)
+        assert count == 1
