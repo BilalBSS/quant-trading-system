@@ -158,17 +158,20 @@ class TestAnalysisEndpoint:
         from src.dashboard import app as dashboard
         pool, conn = _mock_pool()
         dashboard._pool = pool
-        conn.fetchrow.side_effect = [
-            MagicMock(**{"items.return_value": [("ok", 1)], "__iter__": lambda s: iter([("ok", 1)])}),
-            None, None, None,
-            MagicMock(**{"items.return_value": [("size_bytes", 1024000)], "__iter__": lambda s: iter([("size_bytes", 1024000)])}),
-        ]
+        # / health v2 makes many queries — use return_value for all fetchrow/fetch calls
+        conn.fetchrow.return_value = None
+        conn.fetch.return_value = []
         from httpx import AsyncClient, ASGITransport
         async with AsyncClient(transport=ASGITransport(app=dashboard.app), base_url="http://test") as c:
             resp = await c.get("/api/health")
         assert resp.status_code == 200
         data = resp.json()
         assert "db_connected" in data
+        assert "storage" in data
+        assert "connections" in data
+        assert "cycles" in data
+        assert "sources" in data
+        assert "recent_errors" in data
         dashboard._pool = None
 
     @pytest.mark.asyncio

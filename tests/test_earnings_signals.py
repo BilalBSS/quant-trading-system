@@ -101,15 +101,15 @@ class TestComputeEarningsSignal:
 
 class TestComputeEarningsSignalDeep:
     def test_streak_breaks_on_threshold_boundary(self):
-        # / exactly 5% surprise is NOT > SURPRISE_THRESHOLD, so streak breaks
+        # / exactly 2% surprise equals SURPRISE_THRESHOLD (0.02), not > so no beat
         data = {
             "symbol": "EDGE",
             "quarters": [
-                {"period": "Q1", "actual": 1.05, "estimate": 1.00, "surprise_pct": 0.05},
+                {"period": "Q1", "actual": 1.02, "estimate": 1.00, "surprise_pct": 0.02},
             ],
         }
         result = compute_earnings_signal(data)
-        # / 0.05 is not > 0.05, so no streak and no surprise points
+        # / 0.02 is not > 0.02, so no streak
         assert result.consecutive_beats == 0
         assert result.signal == "neutral"
 

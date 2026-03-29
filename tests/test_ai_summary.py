@@ -64,7 +64,7 @@ class TestBuildPrompt:
     def test_includes_ratio_data(self):
         prompt = _build_prompt("AAPL", _sample_ratio(), None, None, None)
         assert "74.0" in prompt
-        assert "Composite" in prompt
+        assert "Overall ratio score" in prompt
 
     def test_includes_dcf_data(self):
         prompt = _build_prompt("AAPL", None, _sample_dcf(), None, None)
