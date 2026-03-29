@@ -114,9 +114,9 @@ class TestGetTransactions:
         assert txns[0]["type"] == "option_exercise"
 
     def test_handles_unknown_code(self):
-        form4 = self._make_form4(market_rows=[{"Code": "X", "Shares": 100, "Price": 10.0}])
+        form4 = self._make_form4(market_rows=[{"Code": "Z", "Shares": 100, "Price": 10.0}])
         txns = _get_transactions(form4)
-        assert txns[0]["type"] == "X"
+        assert txns[0]["type"] == "other"
 
     def test_handles_no_transactions(self):
         form4 = self._make_form4()
