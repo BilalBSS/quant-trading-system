@@ -64,7 +64,7 @@ class TestBuildPrompt:
     def test_includes_ratio_data(self):
         prompt = _build_prompt("AAPL", _sample_ratio(), None, None, None)
         assert "74.0" in prompt
-        assert "Composite" in prompt
+        assert "Overall ratio score" in prompt
 
     def test_includes_dcf_data(self):
         prompt = _build_prompt("AAPL", None, _sample_dcf(), None, None)
@@ -274,3 +274,82 @@ class TestGenerateSummary:
                 # / should fall back gracefully
                 assert result.model_used is None
                 assert result.symbol == "AAPL"
+
+
+# ---------------------------------------------------------------------------
+# / generate_daily_synthesis tests
+# ---------------------------------------------------------------------------
+
+class TestGenerateDailySynthesis:
+    @pytest.mark.asyncio
+    async def test_no_api_key_returns_none(self):
+        from src.analysis.ai_summary import generate_daily_synthesis
+        pool = MagicMock()
+        with patch.dict("os.environ", {}, clear=True):
+            result = await generate_daily_synthesis(pool, ["AAPL", "MSFT"])
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_calls_deepseek_reasoner(self):
+        from src.analysis.ai_summary import generate_daily_synthesis
+
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = [
+            {"symbol": "AAPL", "composite_score": 75.0, "regime": "bull", "ai_consensus": "bullish"},
+        ]
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__.return_value = mock_conn
+        mock_ctx.__aexit__.return_value = False
+        pool = MagicMock()
+        pool.acquire.return_value = mock_ctx
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = lambda: None
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": '{"top_buys": [{"symbol": "AAPL"}], "top_avoids": [], "portfolio_risk": "low", "per_symbol_notes": {}}'}}],
+        }
+        mock_client = AsyncMock()
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.__aexit__.return_value = False
+        mock_client.post.return_value = mock_response
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}):
+            with patch("httpx.AsyncClient", return_value=mock_client):
+                with patch("src.agents.tools.store_daily_synthesis", new_callable=AsyncMock, return_value=1):
+                    result = await generate_daily_synthesis(pool, ["AAPL"])
+
+        assert result is not None
+        assert result["top_buys"] == [{"symbol": "AAPL"}]
+        # / verify it called the deepseek api
+        call_kwargs = mock_client.post.call_args
+        assert "deepseek" in call_kwargs[0][0] or "deepseek" in str(call_kwargs)
+
+    @pytest.mark.asyncio
+    async def test_stores_to_db(self):
+        from src.analysis.ai_summary import generate_daily_synthesis
+
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = [
+            {"symbol": "AAPL", "composite_score": 60.0, "regime": "sideways", "ai_consensus": "neutral"},
+        ]
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__.return_value = mock_conn
+        mock_ctx.__aexit__.return_value = False
+        pool = MagicMock()
+        pool.acquire.return_value = mock_ctx
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = lambda: None
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": '{"top_buys": [], "top_avoids": [], "portfolio_risk": "none", "per_symbol_notes": {}}'}}],
+        }
+        mock_client = AsyncMock()
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.__aexit__.return_value = False
+        mock_client.post.return_value = mock_response
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}):
+            with patch("httpx.AsyncClient", return_value=mock_client):
+                with patch("src.agents.tools.store_daily_synthesis", new_callable=AsyncMock, return_value=1) as mock_store:
+                    await generate_daily_synthesis(pool, ["AAPL"])
+                    mock_store.assert_called_once()

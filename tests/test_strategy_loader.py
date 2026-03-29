@@ -873,3 +873,66 @@ class TestSaveConfigDeep:
         raw["id"] = "test/strategy"
         with pytest.raises(ValueError, match="alphanumeric"):
             save_config(raw, directory=tmp_path)
+
+
+class TestTierFields:
+    # / hierarchical evolution: sector, symbol, tier fields
+
+    def test_tier_default_is_sector(self):
+        raw = _minimal_config()
+        config = validate_config(raw)
+        assert config.tier == "sector"
+
+    def test_sector_validates_against_sectors_dict(self):
+        raw = _minimal_config()
+        raw["sector"] = "cloud_cyber"
+        config = validate_config(raw)
+        assert config.sector == "cloud_cyber"
+
+    def test_invalid_sector_rejected(self):
+        raw = _minimal_config()
+        raw["sector"] = "nonexistent_sector"
+        with pytest.raises(ValueError, match="sector must be one of"):
+            validate_config(raw)
+
+    def test_symbol_requires_tweaked_or_graduated_tier(self):
+        raw = _minimal_config()
+        raw["symbol"] = "PLTR"
+        raw["tier"] = "sector"
+        with pytest.raises(ValueError, match="cannot target a single symbol"):
+            validate_config(raw)
+
+    def test_tweaked_tier_requires_symbol(self):
+        raw = _minimal_config()
+        raw["tier"] = "tweaked"
+        with pytest.raises(ValueError, match="requires a symbol"):
+            validate_config(raw)
+
+    def test_graduated_tier_requires_symbol(self):
+        raw = _minimal_config()
+        raw["tier"] = "graduated"
+        with pytest.raises(ValueError, match="requires a symbol"):
+            validate_config(raw)
+
+    def test_valid_tier2_config(self):
+        raw = _minimal_config()
+        raw["sector"] = "cloud_cyber"
+        raw["symbol"] = "PLTR"
+        raw["tier"] = "tweaked"
+        config = validate_config(raw)
+        assert config.symbol == "PLTR"
+        assert config.tier == "tweaked"
+
+    def test_valid_tier3_config(self):
+        raw = _minimal_config()
+        raw["sector"] = "semis"
+        raw["symbol"] = "NVDA"
+        raw["tier"] = "graduated"
+        config = validate_config(raw)
+        assert config.tier == "graduated"
+
+    def test_invalid_tier_value_rejected(self):
+        raw = _minimal_config()
+        raw["tier"] = "invalid"
+        with pytest.raises(ValueError, match="tier must be"):
+            validate_config(raw)

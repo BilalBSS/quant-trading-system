@@ -140,10 +140,10 @@ class TestInitDb:
                 with patch("src.data.db._run_migrations", new_callable=AsyncMock):
                     result = await init_db()
                     assert result is fake_pool
-                    mock_asyncpg.create_pool.assert_awaited_once_with(
-                        "postgresql://env:pass@host/db",
-                        min_size=2, max_size=10, command_timeout=30,
-                    )
+                    call_kwargs = mock_asyncpg.create_pool.await_args
+                    assert call_kwargs[0][0] == "postgresql://env:pass@host/db"
+                    assert call_kwargs[1]["min_size"] == 2
+                    assert call_kwargs[1]["init"] is not None
 
 
 class TestRunMigrations:

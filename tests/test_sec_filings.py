@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pandas as pd
 import pytest
 
 from src.data.sec_filings import (
@@ -71,184 +72,110 @@ class TestGetUserAgent:
 
 
 class TestGetTransactions:
-    def test_extracts_buy_transaction(self):
-        item = MagicMock()
-        item.transaction_code = "P"
-        item.shares = 1000
-        item.price_per_share = 150.0
+    # / v5 api: _get_transactions uses market_trades (dataframe) and non_derivative_table
 
+    def _make_form4(self, market_rows=None, ndt_rows=None):
+        # / helper to build a v5 form4 mock with dataframe-based transaction data
         form4 = MagicMock()
-        form4.non_derivative_transactions = [item]
-        form4.transactions = None
-        form4.derivative_transactions = None
 
+        if market_rows is not None:
+            form4.market_trades = pd.DataFrame(market_rows)
+        else:
+            form4.market_trades = None
+
+        if ndt_rows is not None:
+            ndt = MagicMock()
+            ndt.has_transactions = True
+            ndt.transactions.data = pd.DataFrame(ndt_rows)
+            form4.non_derivative_table = ndt
+        else:
+            form4.non_derivative_table = None
+
+        return form4
+
+    def test_extracts_buy_transaction(self):
+        form4 = self._make_form4(market_rows=[{"Code": "P", "Shares": 1000, "Price": 150.0}])
         txns = _get_transactions(form4)
         assert len(txns) == 1
         assert txns[0]["type"] == "buy"
         assert txns[0]["shares"] == 1000
 
     def test_extracts_sell_transaction(self):
-        item = MagicMock()
-        item.transaction_code = "S"
-        item.shares = 500
-        item.price_per_share = 200.0
-
-        form4 = MagicMock()
-        form4.non_derivative_transactions = [item]
-        form4.transactions = None
-        form4.derivative_transactions = None
-
+        form4 = self._make_form4(market_rows=[{"Code": "S", "Shares": 500, "Price": 200.0}])
         txns = _get_transactions(form4)
         assert len(txns) == 1
         assert txns[0]["type"] == "sell"
 
     def test_extracts_option_exercise(self):
-        item = MagicMock()
-        item.transaction_code = "M"
-        item.shares = 2000
-        item.price_per_share = 50.0
-
-        form4 = MagicMock()
-        form4.non_derivative_transactions = None
-        form4.transactions = [item]
-        form4.derivative_transactions = None
-
+        # / option exercises come from non_derivative_table, not market_trades
+        form4 = self._make_form4(ndt_rows=[{"Code": "M", "Shares": 2000, "Price": 50.0}])
         txns = _get_transactions(form4)
         assert len(txns) == 1
         assert txns[0]["type"] == "option_exercise"
 
     def test_handles_unknown_code(self):
-        item = MagicMock()
-        item.transaction_code = "X"
-        item.shares = 100
-        item.price_per_share = 10.0
-
-        form4 = MagicMock()
-        form4.non_derivative_transactions = [item]
-        form4.transactions = None
-        form4.derivative_transactions = None
-
+        form4 = self._make_form4(market_rows=[{"Code": "X", "Shares": 100, "Price": 10.0}])
         txns = _get_transactions(form4)
         assert txns[0]["type"] == "X"
 
     def test_handles_no_transactions(self):
-        form4 = MagicMock()
-        form4.non_derivative_transactions = None
-        form4.transactions = None
-        form4.derivative_transactions = None
-
+        form4 = self._make_form4()
         txns = _get_transactions(form4)
         assert txns == []
 
     def test_continues_on_iteration_error(self):
         form4 = MagicMock()
-        form4.non_derivative_transactions = MagicMock(side_effect=TypeError("not iterable"))
-        form4.transactions = None
-        form4.derivative_transactions = None
-
-        # / should not crash
+        # / market_trades raises on iteration
+        form4.market_trades = MagicMock()
+        form4.market_trades.empty = False
+        form4.market_trades.iterrows = MagicMock(side_effect=TypeError("not iterable"))
+        form4.non_derivative_table = None
         txns = _get_transactions(form4)
         assert txns == []
 
     def test_multiple_transaction_types_in_single_form4(self):
-        # / buy + sell + option_exercise all in one form4
-        buy = MagicMock()
-        buy.transaction_code = "P"
-        buy.shares = 1000
-        buy.price_per_share = 100.0
-
-        sell = MagicMock()
-        sell.transaction_code = "S"
-        sell.shares = 500
-        sell.price_per_share = 120.0
-
-        exercise = MagicMock()
-        exercise.transaction_code = "M"
-        exercise.shares = 2000
-        exercise.price_per_share = 50.0
-
-        form4 = MagicMock()
-        form4.non_derivative_transactions = [buy, sell, exercise]
-        form4.transactions = None
-        form4.derivative_transactions = None
-
+        # / buy + sell in market_trades, option_exercise in non_derivative_table
+        form4 = self._make_form4(
+            market_rows=[
+                {"Code": "P", "Shares": 1000, "Price": 100.0},
+                {"Code": "S", "Shares": 500, "Price": 120.0},
+            ],
+            ndt_rows=[{"Code": "M", "Shares": 2000, "Price": 50.0}],
+        )
         txns = _get_transactions(form4)
         assert len(txns) == 3
         types = {t["type"] for t in txns}
         assert types == {"buy", "sell", "option_exercise"}
 
     def test_zero_shares_transaction(self):
-        # / shares=0 is falsy, so _safe_get(item, "shares", 0) or _safe_get(item, "transaction_shares", 0)
-        # / falls through to transaction_shares; set that to 0 too
-        item = MagicMock(spec=["transaction_code", "shares", "transaction_shares", "price_per_share", "transaction_price_per_share"])
-        item.transaction_code = "P"
-        item.shares = 0
-        item.transaction_shares = 0
-        item.price_per_share = 100.0
-        item.transaction_price_per_share = 0
-
-        form4 = MagicMock()
-        form4.non_derivative_transactions = [item]
-        form4.transactions = None
-        form4.derivative_transactions = None
-
+        form4 = self._make_form4(market_rows=[{"Code": "P", "Shares": 0, "Price": 100.0}])
         txns = _get_transactions(form4)
         assert len(txns) == 1
         assert txns[0]["shares"] == 0
 
     def test_zero_price_transaction(self):
-        # / price=0 is falsy, falls through to transaction_price_per_share
-        item = MagicMock(spec=["transaction_code", "shares", "transaction_shares", "price_per_share", "transaction_price_per_share"])
-        item.transaction_code = "M"
-        item.shares = 1000
-        item.transaction_shares = 0
-        item.price_per_share = 0
-        item.transaction_price_per_share = 0
-
-        form4 = MagicMock()
-        form4.non_derivative_transactions = [item]
-        form4.transactions = None
-        form4.derivative_transactions = None
-
+        form4 = self._make_form4(market_rows=[{"Code": "M", "Shares": 1000, "Price": 0}])
         txns = _get_transactions(form4)
         assert len(txns) == 1
         assert txns[0]["price"] == 0
 
     def test_lowercase_transaction_codes(self):
-        # / lowercase p, s, m should map to buy, sell, option_exercise
-        items = []
-        for code, expected in [("p", "buy"), ("s", "sell"), ("m", "option_exercise")]:
-            item = MagicMock()
-            item.transaction_code = code
-            item.shares = 100
-            item.price_per_share = 50.0
-            items.append((item, expected))
-
-        for item, expected_type in items:
-            form4 = MagicMock()
-            form4.non_derivative_transactions = [item]
-            form4.transactions = None
-            form4.derivative_transactions = None
-
+        # / lowercase p, s should map to buy, sell via _code_to_type
+        for code, expected in [("p", "buy"), ("s", "sell")]:
+            form4 = self._make_form4(market_rows=[{"Code": code, "Shares": 100, "Price": 50.0}])
             txns = _get_transactions(form4)
-            assert txns[0]["type"] == expected_type
+            assert txns[0]["type"] == expected
 
-    def test_fallback_from_shares_to_transaction_shares(self):
-        # / when shares is None, should fall back to transaction_shares attr
-        item = MagicMock()
-        item.transaction_code = "P"
-        item.shares = None
-        item.transaction_shares = 750
-        item.price_per_share = 100.0
-
-        form4 = MagicMock()
-        form4.non_derivative_transactions = [item]
-        form4.transactions = None
-        form4.derivative_transactions = None
-
+    def test_ndt_excludes_market_codes(self):
+        # / non_derivative_table skips P and S codes (those are in market_trades)
+        form4 = self._make_form4(ndt_rows=[
+            {"Code": "P", "Shares": 100, "Price": 50.0},
+            {"Code": "M", "Shares": 200, "Price": 30.0},
+        ])
         txns = _get_transactions(form4)
+        # / only M should come through, P is filtered out
         assert len(txns) == 1
-        assert txns[0]["shares"] == 750
+        assert txns[0]["type"] == "option_exercise"
 
 
 class TestFetchInsiderTrades:

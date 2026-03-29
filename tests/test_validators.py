@@ -106,7 +106,7 @@ class TestValidateMarketData:
         assert all(r.valid for r in results)
 
     def test_volume_too_high(self):
-        row = {"open": 100, "high": 110, "low": 95, "close": 105, "volume": 999_999_999_999}
+        row = {"open": 100, "high": 110, "low": 95, "close": 105, "volume": 9_999_999_999_999}
         results = validate_market_data(row)
         failures = [r for r in results if not r.valid]
         assert any(r.field == "volume" for r in failures)
@@ -207,7 +207,7 @@ class TestValidateFundamentals:
         assert fcf_result.valid is True
 
     def test_fcf_margin_too_low(self):
-        row = {"fcf_margin": -15}
+        row = {"fcf_margin": -55}
         results = validate_fundamentals(row)
         fcf_result = next(r for r in results if r.field == "fcf_margin")
         assert fcf_result.valid is False
