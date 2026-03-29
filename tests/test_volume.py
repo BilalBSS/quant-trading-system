@@ -174,6 +174,28 @@ class TestVWAPDeep:
         assert (valid >= l.min()).all()
         assert (valid <= h.max()).all()
 
+    def test_session_reset_with_dates(self):
+        # / vwap resets at each date boundary when dates param provided
+        high = pd.Series([11.0, 12.0, 13.0, 14.0])
+        low = pd.Series([9.0, 10.0, 11.0, 12.0])
+        close = pd.Series([10.0, 11.0, 12.0, 13.0])
+        vol = pd.Series([100.0, 100.0, 100.0, 100.0])
+        dates = pd.Series(["2024-01-01", "2024-01-01", "2024-01-02", "2024-01-02"])
+        result = vwap(high, low, close, vol, dates=dates)
+        # / bar 2 (idx 1): cumulative vwap of day 1 = avg tp of bars 0-1
+        tp0, tp1 = (11+9+10)/3, (12+10+11)/3
+        assert result.iloc[1] == pytest.approx((tp0*100 + tp1*100) / 200, abs=0.01)
+        # / bar 3 (idx 2): session reset, vwap = tp of bar 2 only
+        tp2 = (13+11+12)/3
+        assert result.iloc[2] == pytest.approx(tp2, abs=0.01)
+
+    def test_no_dates_unchanged_behavior(self):
+        # / without dates param, behaves same as before (cumsum across all)
+        h, l, c, v = _ohlcv(50)
+        result_no_dates = vwap(h, l, c, v)
+        result_none = vwap(h, l, c, v, dates=None)
+        pd.testing.assert_series_equal(result_no_dates, result_none)
+
 
 class TestVolumeProfileDeep:
     def test_poc_is_highest_volume(self):
