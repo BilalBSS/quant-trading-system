@@ -82,6 +82,7 @@ class TestOrchestratorInit:
             patch.object(orch, "_evolution_loop", new_callable=AsyncMock) as m_evl,
             patch.object(orch, "_insider_backfill_loop", new_callable=AsyncMock) as m_ibl,
             patch.object(orch, "_fundamentals_backfill_loop", new_callable=AsyncMock) as m_fbl,
+            patch.object(orch, "_crypto_backfill_loop", new_callable=AsyncMock) as m_cbl,
         ):
             await orch.start()
 
@@ -110,6 +111,7 @@ class TestOrchestratorInit:
             patch.object(orch, "_evolution_loop", new_callable=AsyncMock),
             patch.object(orch, "_insider_backfill_loop", new_callable=AsyncMock),
             patch.object(orch, "_fundamentals_backfill_loop", new_callable=AsyncMock),
+            patch.object(orch, "_crypto_backfill_loop", new_callable=AsyncMock),
         ):
             await orch.start()
 
