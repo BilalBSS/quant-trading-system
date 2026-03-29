@@ -11,3 +11,4 @@ CLAUDE.md
 .claudeignore
 reports/*.md
 !reports/.gitkeep
+.gstack/
