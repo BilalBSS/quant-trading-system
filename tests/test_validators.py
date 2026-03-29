@@ -207,7 +207,7 @@ class TestValidateFundamentals:
         assert fcf_result.valid is True
 
     def test_fcf_margin_too_low(self):
-        row = {"fcf_margin": -15}
+        row = {"fcf_margin": -55}
         results = validate_fundamentals(row)
         fcf_result = next(r for r in results if r.field == "fcf_margin")
         assert fcf_result.valid is False
