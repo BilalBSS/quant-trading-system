@@ -1392,3 +1392,78 @@ class TestFundamentalFiltersDeep:
         result_below = s.should_enter("AAPL", data, analysis_below)
         assert result_below.should_enter is False
         assert any("dcf" in r for r in result_below.reasons)
+
+
+# ---------------------------------------------------------------------------
+# / bear market overrides
+# ---------------------------------------------------------------------------
+
+class TestBearMarketOverrides:
+    def test_no_regime_uses_base(self):
+        # / without regime, base fundamental filters apply
+        cfg = _base_config(
+            fundamental_filters={"pe_ratio_max": 30, "dcf_upside_min": 0.10},
+            bear_market_overrides={
+                "fundamental_filters": {"pe_ratio_max": 20},
+            },
+            entry_conditions={"operator": "AND", "signals": []},
+        )
+        s = ConfigDrivenStrategy(cfg)
+        data = _ohlcv(120)
+        # / pe=25 passes base (max=30) but would fail bear override (max=20)
+        analysis = AnalysisData(pe_ratio=25.0, dcf_upside=0.15)
+        result = s.should_enter("AAPL", data, analysis)
+        # / no regime -> base filter pe_ratio_max=30 used, 25 < 30 passes
+        assert not any("pe" in r.lower() and "max" in r.lower() for r in result.reasons)
+
+    def test_bear_regime_uses_overrides(self):
+        # / bear regime should apply overrides
+        cfg = _base_config(
+            fundamental_filters={"pe_ratio_max": 30, "dcf_upside_min": 0.10},
+            bear_market_overrides={
+                "fundamental_filters": {"pe_ratio_max": 20},
+            },
+            entry_conditions={"operator": "AND", "signals": []},
+        )
+        s = ConfigDrivenStrategy(cfg)
+        data = _ohlcv(120)
+        # / pe=25 fails bear override (max=20), regime=bear
+        analysis = AnalysisData(pe_ratio=25.0, dcf_upside=0.15, regime="bear")
+        result = s.should_enter("AAPL", data, analysis)
+        assert result.should_enter is False
+        assert any("pe" in r.lower() for r in result.reasons)
+
+    def test_bull_regime_ignores_overrides(self):
+        # / bull regime should use base filters, not bear overrides
+        cfg = _base_config(
+            fundamental_filters={"pe_ratio_max": 30, "dcf_upside_min": 0.10},
+            bear_market_overrides={
+                "fundamental_filters": {"pe_ratio_max": 20},
+            },
+            entry_conditions={"operator": "AND", "signals": []},
+        )
+        s = ConfigDrivenStrategy(cfg)
+        data = _ohlcv(120)
+        # / pe=25, regime=bull -> base filter used (max=30), passes
+        analysis = AnalysisData(pe_ratio=25.0, dcf_upside=0.15, regime="bull")
+        result = s.should_enter("AAPL", data, analysis)
+        assert not any("pe" in r.lower() and "max" in r.lower() for r in result.reasons)
+
+    def test_effective_bypass_consensus_bear(self):
+        # / bear override sets bypass_consensus=True
+        cfg = _base_config(
+            bypass_consensus=False,
+            bear_market_overrides={"bypass_consensus": True},
+        )
+        s = ConfigDrivenStrategy(cfg)
+        assert s.get_effective_bypass_consensus(regime=None) is False
+        assert s.get_effective_bypass_consensus(regime="bull") is False
+        assert s.get_effective_bypass_consensus(regime="bear") is True
+
+    def test_effective_bypass_consensus_no_override(self):
+        # / no bear override -> base value used in all regimes
+        cfg = _base_config(bypass_consensus=True)
+        s = ConfigDrivenStrategy(cfg)
+        assert s.get_effective_bypass_consensus(regime=None) is True
+        assert s.get_effective_bypass_consensus(regime="bear") is True
+        assert s.get_effective_bypass_consensus(regime="bull") is True

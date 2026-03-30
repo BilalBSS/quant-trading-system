@@ -33,18 +33,22 @@ def _mock_pool(mock_conn=None):
     return pool
 
 
-def _make_market_rows(n: int = 100) -> list[dict]:
+def _make_market_rows(n: int = 100, ascending: bool = False) -> list[dict]:
     # / generate fake db rows for market data
     base = datetime(2024, 1, 1)
     rows = []
     for i in range(n):
         d = base + timedelta(days=i)
+        if ascending:
+            c = 100.0 + i * 0.1
+        else:
+            c = 200.0 - i * 0.1
         rows.append({
             "date": d,
-            "open": 100.0 + i * 0.1,
-            "high": 101.0 + i * 0.1,
-            "low": 99.0 + i * 0.1,
-            "close": 100.5 + i * 0.1,
+            "open": c - 0.5,
+            "high": c + 0.5,
+            "low": c - 1.0,
+            "close": c,
             "volume": 1000000,
         })
     # / return in descending order (as db would return)
@@ -690,3 +694,36 @@ class TestEdgeCases:
 
         # / strat2 should still produce signals
         assert len(signals) >= 1
+
+
+# ---------------------------------------------------------------------------
+# / _classify_symbol_trend
+# ---------------------------------------------------------------------------
+
+class TestClassifySymbolTrend:
+    def test_uptrend(self):
+        data = {"close": [100.0 + i * 0.5 for i in range(100)]}
+        df = pd.DataFrame(data)
+        assert StrategyAgent._classify_symbol_trend(df) == "up"
+
+    def test_downtrend(self):
+        data = {"close": [200.0 - i * 0.5 for i in range(100)]}
+        df = pd.DataFrame(data)
+        assert StrategyAgent._classify_symbol_trend(df) == "down"
+
+    def test_insufficient_data(self):
+        data = {"close": [100.0 + i for i in range(30)]}
+        df = pd.DataFrame(data)
+        assert StrategyAgent._classify_symbol_trend(df) == "unknown"
+
+    def test_none_df(self):
+        assert StrategyAgent._classify_symbol_trend(None) == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# / softened consensus constants
+# ---------------------------------------------------------------------------
+
+class TestSoftenedConsensusConstants:
+    def test_signal_threshold(self):
+        assert SIGNAL_THRESHOLD == 0.20
