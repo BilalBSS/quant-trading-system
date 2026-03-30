@@ -64,7 +64,7 @@ class TestBuildPrompt:
     def test_includes_ratio_data(self):
         prompt = _build_prompt("AAPL", _sample_ratio(), None, None, None)
         assert "74.0" in prompt
-        assert "Overall ratio score" in prompt
+        assert "Ratio score" in prompt
 
     def test_includes_dcf_data(self):
         prompt = _build_prompt("AAPL", None, _sample_dcf(), None, None)
@@ -223,7 +223,7 @@ class TestGenerateSummary:
                 result = await generate_summary(
                     "AAPL", ratio=_sample_ratio(),
                 )
-                assert result.model_used == "llama-3.1-8b-instant"
+                assert result.model_used == "openai/gpt-oss-120b"
                 assert result.signal == "bullish"
 
     @pytest.mark.asyncio
@@ -353,3 +353,140 @@ class TestGenerateDailySynthesis:
                 with patch("src.agents.tools.store_daily_synthesis", new_callable=AsyncMock, return_value=1) as mock_store:
                     await generate_daily_synthesis(pool, ["AAPL"])
                     mock_store.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# / _extract_signal tests
+# ---------------------------------------------------------------------------
+
+class TestExtractSignal:
+    def test_clean_bullish_prefix(self):
+        from src.analysis.ai_summary import _extract_signal
+        signal, conf = _extract_signal("SIGNAL: BULLISH\nStrong fundamentals.")
+        assert signal == "bullish"
+        assert conf == 90.0
+
+    def test_clean_bearish_prefix_lowercase(self):
+        from src.analysis.ai_summary import _extract_signal
+        signal, conf = _extract_signal("signal: bearish\nWeak margins.")
+        assert signal == "bearish"
+        assert conf == 90.0
+
+    def test_markdown_bold_prefix(self):
+        from src.analysis.ai_summary import _extract_signal
+        signal, conf = _extract_signal("**SIGNAL: BULLISH**\nUpside.")
+        assert signal == "bullish"
+        assert conf == 90.0
+
+    def test_first_word_bullish(self):
+        from src.analysis.ai_summary import _extract_signal
+        signal, conf = _extract_signal("Bullish. AAPL strong.")
+        assert signal == "bullish"
+        assert conf == 90.0
+
+    def test_empty_string(self):
+        from src.analysis.ai_summary import _extract_signal
+        signal, conf = _extract_signal("")
+        assert signal == "neutral"
+        assert conf == 30.0
+
+    def test_not_bullish_counts_bearish(self):
+        from src.analysis.ai_summary import _extract_signal
+        signal, conf = _extract_signal("The outlook is not bullish given headwinds.")
+        assert signal == "bearish"
+
+    def test_clear_bearish_dominance(self):
+        from src.analysis.ai_summary import _extract_signal
+        signal, conf = _extract_signal("Overvalued. Bearish pressure.\n\nSell recommendation. Downside risk.")
+        assert signal == "bearish"
+        assert conf == 70.0
+
+    def test_no_keywords_neutral(self):
+        from src.analysis.ai_summary import _extract_signal
+        signal, conf = _extract_signal("The company reported earnings in line with expectations.")
+        assert signal == "neutral"
+        assert conf == 30.0
+
+    def test_last_paragraph_weighted(self):
+        from src.analysis.ai_summary import _extract_signal
+        signal, _ = _extract_signal("Some bearish signals.\n\nOverall bullish. Strong buy.")
+        assert signal == "bullish"
+
+
+# ---------------------------------------------------------------------------
+# / _compute_consensus tests
+# ---------------------------------------------------------------------------
+
+class TestComputeConsensusConfidence:
+    def _make(self, signal, confidence):
+        return AnalysisSummary(
+            symbol="TEST", date=date(2026, 3, 30), summary="t",
+            model_used="t", signal=signal, confidence=confidence,
+        )
+
+    def test_only_groq(self):
+        from src.analysis.ai_summary import _compute_consensus
+        groq = self._make("bullish", 80.0)
+        signal, conf = _compute_consensus(groq, None)
+        assert signal == "bullish" and conf == 80.0
+
+    def test_both_agree(self):
+        from src.analysis.ai_summary import _compute_consensus
+        signal, conf = _compute_consensus(
+            self._make("bullish", 75.0), self._make("bullish", 85.0),
+        )
+        assert signal == "bullish" and conf == 85.0
+
+    def test_disagree_large_gap(self):
+        from src.analysis.ai_summary import _compute_consensus
+        signal, conf = _compute_consensus(
+            self._make("bullish", 90.0), self._make("bearish", 50.0),
+        )
+        assert signal == "bullish" and conf == 80.0
+
+    def test_disagree_small_gap(self):
+        from src.analysis.ai_summary import _compute_consensus
+        signal, conf = _compute_consensus(
+            self._make("bullish", 70.0), self._make("bearish", 65.0),
+        )
+        assert signal == "disagree"
+        assert conf == 67.5
+
+    def test_soft_disagree_neutral_vs_bullish(self):
+        from src.analysis.ai_summary import _compute_consensus
+        signal, conf = _compute_consensus(
+            self._make("bullish", 80.0), self._make("neutral", 60.0),
+        )
+        assert signal == "bullish" and conf == 65.0
+
+
+# ---------------------------------------------------------------------------
+# / _build_crypto_prompt tests
+# ---------------------------------------------------------------------------
+
+class TestBuildCryptoPrompt:
+    def test_includes_symbol(self):
+        from src.analysis.ai_summary import _build_crypto_prompt
+        prompt = _build_crypto_prompt("BTC-USD")
+        assert "BTC-USD" in prompt
+
+    def test_includes_nvt(self):
+        from src.analysis.ai_summary import _build_crypto_prompt
+        prompt = _build_crypto_prompt("BTC-USD", nvt=12.3)
+        assert "12.3" in prompt and "NVT" in prompt
+
+    def test_includes_funding_rate(self):
+        from src.analysis.ai_summary import _build_crypto_prompt
+        prompt = _build_crypto_prompt("ETH-USD", funding_rate=0.0006)
+        assert "Funding" in prompt
+
+    def test_all_none_no_crash(self):
+        from src.analysis.ai_summary import _build_crypto_prompt
+        prompt = _build_crypto_prompt("SOL-USD")
+        assert "SIGNAL:" in prompt
+        assert "Analysis Framework" in prompt
+
+    def test_signal_instruction_present(self):
+        from src.analysis.ai_summary import _build_crypto_prompt
+        prompt = _build_crypto_prompt("BTC-USD", nvt=10.0)
+        assert "SIGNAL: BULLISH" in prompt or "SIGNAL:" in prompt

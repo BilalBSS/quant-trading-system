@@ -137,7 +137,7 @@ class TestComputeDcf:
             growth_std=0.001, margin_std=0.001, terminal_multiple_std=0.1,
             shares_outstanding=1.0,
         )
-        result = compute_dcf("TIGHT", 100.0, tight, num_simulations=1000, rng=rng)
+        result = compute_dcf("TIGHT", 1000.0, tight, num_simulations=1000, rng=rng)
         assert result.confidence == "high"
 
 
@@ -400,3 +400,72 @@ class TestStoreDcfResult:
 
         success = await store_dcf_result(pool, result)
         assert success is False
+
+
+# ---------------------------------------------------------------------------
+# / compute_terminal_multiple tests
+# ---------------------------------------------------------------------------
+
+class TestComputeTerminalMultiple:
+    def test_negative_growth_severe(self):
+        from src.analysis.dcf_model import compute_terminal_multiple
+        assert compute_terminal_multiple(-0.25) == 6.0
+
+    def test_zero_growth(self):
+        from src.analysis.dcf_model import compute_terminal_multiple
+        assert compute_terminal_multiple(0.0) == 10.0
+
+    def test_moderate_growth(self):
+        from src.analysis.dcf_model import compute_terminal_multiple
+        assert compute_terminal_multiple(0.10) == 15.0
+
+    def test_high_growth_interpolated(self):
+        from src.analysis.dcf_model import compute_terminal_multiple
+        result = compute_terminal_multiple(0.19)
+        assert 20.0 <= result <= 21.0
+
+    def test_extreme_growth_cap(self):
+        from src.analysis.dcf_model import compute_terminal_multiple
+        assert compute_terminal_multiple(1.50) == 40.0
+
+    def test_fcf_margin_premium(self):
+        from src.analysis.dcf_model import compute_terminal_multiple
+        base = compute_terminal_multiple(0.30)
+        with_margin = compute_terminal_multiple(0.30, fcf_margin=0.45)
+        assert with_margin > base
+
+    def test_fcf_margin_discount(self):
+        from src.analysis.dcf_model import compute_terminal_multiple
+        base = compute_terminal_multiple(0.30)
+        with_margin = compute_terminal_multiple(0.30, fcf_margin=0.02)
+        assert with_margin < base
+
+    def test_nan_growth_returns_default(self):
+        from src.analysis.dcf_model import compute_terminal_multiple
+        assert compute_terminal_multiple(float('nan')) == 15.0
+
+    def test_monotonicity(self):
+        from src.analysis.dcf_model import compute_terminal_multiple
+        prev = 0.0
+        for g in range(-30, 110, 5):
+            result = compute_terminal_multiple(g / 100.0)
+            assert result >= prev
+            prev = result
+
+    def test_fcf_margin_floor(self):
+        from src.analysis.dcf_model import compute_terminal_multiple
+        result = compute_terminal_multiple(0.10, fcf_margin=-0.50)
+        # / adjustment = 1.0 + 0.5*(-0.50-0.15) = 0.675, clamped to floor 0.70
+        assert result == 10.5
+
+    def test_fcf_margin_cap(self):
+        from src.analysis.dcf_model import compute_terminal_multiple
+        result = compute_terminal_multiple(0.10, fcf_margin=0.80)
+        assert result == 19.5
+
+
+class TestTerminalMultipleStd:
+    def test_proportional(self):
+        from src.analysis.dcf_model import compute_terminal_multiple_std
+        assert compute_terminal_multiple_std(15.0) == 2.7
+        assert compute_terminal_multiple_std(33.0) == 5.9
