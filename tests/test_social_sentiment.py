@@ -237,7 +237,7 @@ class TestRunSocialSentiment:
 
         with patch("src.data.social_sentiment.fetch_apewisdom", new_callable=AsyncMock, return_value=aw_data):
             with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=None):
-                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value=0.1):
+                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value={"raw_level": 28.0, "normalized": 0.1}):
                     results = await run_social_sentiment(pool, ["AAPL", "MSFT"])
                     assert len(results) == 2
                     assert "AAPL" in results
@@ -250,7 +250,7 @@ class TestRunSocialSentiment:
 
         with patch("src.data.social_sentiment.fetch_apewisdom", new_callable=AsyncMock, return_value=aw_data):
             with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=None):
-                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value=0.1):
+                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value={"raw_level": 28.0, "normalized": 0.1}):
                     await run_social_sentiment(pool, ["AAPL"])
                     # / should store both apewisdom and vix
                     assert conn.execute.call_count == 2
@@ -271,7 +271,7 @@ class TestRunSocialSentiment:
 
         with patch("src.data.social_sentiment.fetch_apewisdom", new_callable=AsyncMock, return_value={}):
             with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=None):
-                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value=0.3):
+                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value={"raw_level": 24.0, "normalized": 0.3}):
                     results = await run_social_sentiment(pool, ["AAPL"])
                     # / no apewisdom data, vix only: 0.3
                     assert results["AAPL"] == pytest.approx(0.3)
@@ -304,7 +304,7 @@ class TestRunSocialSentiment:
 
         with patch("src.data.social_sentiment.fetch_apewisdom", new_callable=AsyncMock, return_value=aw_data):
             with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=None):
-                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value=0.4):
+                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value={"raw_level": 22.0, "normalized": 0.4}):
                     results = await run_social_sentiment(pool, ["AAPL"])
                     # / equity: (0.6 * 0.6 + 0.4 * 0.4) / 1.0 = 0.52
                     assert results["AAPL"] == pytest.approx(0.52)
@@ -323,7 +323,8 @@ class TestFetchVix:
         mock_ticker.history.return_value = mock_hist
         with patch("yfinance.Ticker", return_value=mock_ticker):
             result = _fetch_vix_sync()
-        assert result == pytest.approx(0.5)
+        assert result["normalized"] == pytest.approx(0.5)
+        assert result["raw_level"] == pytest.approx(20.0)
 
     def test_vix_extreme_high_clamped(self):
         # / VIX=60 -> (30-60)/20 = -1.5 -> clamped to -1.0
@@ -333,7 +334,8 @@ class TestFetchVix:
         mock_ticker.history.return_value = mock_hist
         with patch("yfinance.Ticker", return_value=mock_ticker):
             result = _fetch_vix_sync()
-        assert result == -1.0
+        assert result["normalized"] == -1.0
+        assert result["raw_level"] == pytest.approx(60.0)
 
     def test_vix_extreme_low_clamped(self):
         # / VIX=5 -> (30-5)/20 = 1.25 -> clamped to 1.0
@@ -343,7 +345,8 @@ class TestFetchVix:
         mock_ticker.history.return_value = mock_hist
         with patch("yfinance.Ticker", return_value=mock_ticker):
             result = _fetch_vix_sync()
-        assert result == 1.0
+        assert result["normalized"] == 1.0
+        assert result["raw_level"] == pytest.approx(5.0)
 
     def test_vix_empty_history_returns_none(self):
         import pandas as pd
@@ -360,9 +363,11 @@ class TestFetchVix:
 
     @pytest.mark.asyncio
     async def test_async_fetch_vix_wraps_sync(self):
-        with patch("src.data.social_sentiment._fetch_vix_sync", return_value=0.3):
+        vix_dict = {"raw_level": 24.0, "normalized": 0.3}
+        with patch("src.data.social_sentiment._fetch_vix_sync", return_value=vix_dict):
             result = await fetch_vix()
-        assert result == 0.3
+        assert result["normalized"] == pytest.approx(0.3)
+        assert result["raw_level"] == pytest.approx(24.0)
 
 
 # ---------------------------------------------------------------------------
@@ -528,7 +533,7 @@ class TestScoreSplit:
 
         with patch("src.data.social_sentiment.fetch_apewisdom", new_callable=AsyncMock, return_value=aw_data):
             with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=fng_data):
-                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value=-0.5):
+                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value={"raw_level": 40.0, "normalized": -0.5}):
                     results = await run_social_sentiment(pool, ["AAPL"])
                     # / equity: (0.0 * 0.6 + (-0.5) * 0.4) / 1.0 = -0.2
                     assert results["AAPL"] == pytest.approx(-0.2)
@@ -546,7 +551,7 @@ class TestScoreSplit:
 
         with patch("src.data.social_sentiment.fetch_apewisdom", side_effect=aw_side_effect):
             with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=fng_data):
-                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value=-0.5):
+                with patch("src.data.social_sentiment.fetch_vix", new_callable=AsyncMock, return_value={"raw_level": 40.0, "normalized": -0.5}):
                     results = await run_social_sentiment(pool, ["BTC-USD"])
                     # / crypto: (0.0 * 0.6 + 0.8 * 0.4) / 1.0 = 0.32
                     assert results["BTC-USD"] == pytest.approx(0.32)

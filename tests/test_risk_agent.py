@@ -144,8 +144,8 @@ class TestRiskAgentApproval:
         broker = _make_broker()
 
         result = await self.agent.process_signal(pool, 999, broker)
-        assert result["status"] == "error"
-        assert result["reason"] == "signal_not_found"
+        assert result["status"] == "skipped"
+        assert result["reason"] == "signal_not_found_or_not_pending"
 
     @pytest.mark.asyncio
     async def test_whole_shares_only(self):
