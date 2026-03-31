@@ -10,16 +10,17 @@ from src.brokers.alpaca_broker import AlpacaBroker
 
 
 class TestBrokerFactory:
-    def test_paper_mode(self):
+    def test_paper_mode_uses_alpaca(self):
+        # / paper mode uses AlpacaBroker (hits alpaca paper-api)
         factory = BrokerFactory(mode="paper")
         assert factory.mode == "paper"
         broker = factory.get_broker("AAPL")
-        assert isinstance(broker, PaperBroker)
+        assert isinstance(broker, AlpacaBroker)
 
     def test_paper_mode_crypto(self):
         factory = BrokerFactory(mode="paper")
         broker = factory.get_broker("BTC-USD")
-        assert isinstance(broker, PaperBroker)
+        assert isinstance(broker, AlpacaBroker)
 
     def test_live_mode(self):
         factory = BrokerFactory(mode="live")
@@ -27,17 +28,25 @@ class TestBrokerFactory:
         broker = factory.get_broker("AAPL")
         assert isinstance(broker, AlpacaBroker)
 
-    def test_paper_broker_property(self):
-        factory = BrokerFactory(mode="paper")
+    def test_backtest_mode_uses_paper_broker(self):
+        # / backtest mode uses in-memory PaperBroker for simulation
+        factory = BrokerFactory(mode="backtest")
+        assert factory.mode == "backtest"
+        broker = factory.get_broker("AAPL")
+        assert isinstance(broker, PaperBroker)
+
+    def test_paper_broker_property_backtest(self):
+        factory = BrokerFactory(mode="backtest")
         assert factory.paper_broker is not None
         assert isinstance(factory.paper_broker, PaperBroker)
 
-    def test_paper_broker_none_in_live(self):
-        factory = BrokerFactory(mode="live")
-        assert factory.paper_broker is None
+    def test_paper_broker_none_in_paper_and_live(self):
+        # / paper + live both use alpaca, no in-memory broker
+        assert BrokerFactory(mode="paper").paper_broker is None
+        assert BrokerFactory(mode="live").paper_broker is None
 
-    def test_initial_cash(self):
-        factory = BrokerFactory(mode="paper", initial_cash=50_000.0)
+    def test_initial_cash_backtest(self):
+        factory = BrokerFactory(mode="backtest", initial_cash=50_000.0)
         broker = factory.get_broker()
         assert isinstance(broker, PaperBroker)
         assert broker.cash == 50_000.0
@@ -50,7 +59,7 @@ class TestCreateBroker:
         assert factory.mode == "paper"
 
 
-# ---------- new deep tests ----------
+# ---------- deep tests ----------
 
 
 class TestBrokerFactoryDeep:
@@ -59,18 +68,15 @@ class TestBrokerFactoryDeep:
             BrokerFactory(mode="invalid")
 
     def test_case_sensitive_mode(self):
-        # / "Paper" with capital P should fail
         with pytest.raises(ValueError, match="invalid broker mode"):
             BrokerFactory(mode="Paper")
 
     def test_get_broker_returns_same_type_consistently(self):
-        # / calling get_broker multiple times returns same instance type
         factory = BrokerFactory(mode="paper")
         b1 = factory.get_broker("AAPL")
         b2 = factory.get_broker("MSFT")
         b3 = factory.get_broker("BTC-USD")
         assert type(b1) is type(b2) is type(b3)
-        # / in paper mode they should be the exact same instance
         assert b1 is b2 is b3
 
     def test_mode_property_paper(self):
