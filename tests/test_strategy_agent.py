@@ -224,6 +224,8 @@ class TestStrategyAgentRun:
         )
         broker = _make_broker(positions=[pos])
 
+        # / mock strategy_positions to return AAPL position for this strategy
+        strat_pos = [{"strategy_id": "test_001", "symbol": "AAPL", "qty": 10, "avg_entry_price": 100.0}]
         with (
             patch.object(strat, "should_enter", return_value=EntrySignal(should_enter=False)),
             patch.object(strat, "resolve_universe", return_value=["AAPL"]),
@@ -232,6 +234,7 @@ class TestStrategyAgentRun:
             )),
             patch("src.agents.strategy_agent.tools.fetch_analysis_score", new_callable=AsyncMock, return_value=None),
             patch("src.agents.strategy_agent.tools.store_trade_signal", new_callable=AsyncMock, return_value=55),
+            patch("src.agents.strategy_agent.tools.get_strategy_positions", new_callable=AsyncMock, return_value=strat_pos),
         ):
             signals = await self.agent.run(pool, sp, broker)
 
