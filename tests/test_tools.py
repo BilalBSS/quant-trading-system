@@ -172,7 +172,8 @@ class TestStoreTradeSignal:
     @pytest.mark.asyncio
     async def test_returns_id(self):
         mock_conn = AsyncMock()
-        mock_conn.fetchrow.return_value = {"id": 7}
+        # / first fetchrow = SELECT existing (None), second = INSERT returning id
+        mock_conn.fetchrow.side_effect = [None, {"id": 7}]
         pool = _mock_pool(mock_conn)
 
         result = await store_trade_signal(
@@ -183,28 +184,29 @@ class TestStoreTradeSignal:
     @pytest.mark.asyncio
     async def test_strength_as_decimal(self):
         mock_conn = AsyncMock()
-        mock_conn.fetchrow.return_value = {"id": 1}
+        mock_conn.fetchrow.side_effect = [None, {"id": 1}]
         pool = _mock_pool(mock_conn)
 
         await store_trade_signal(pool, "s1", "MSFT", "sell", 0.42, None)
-        args = mock_conn.fetchrow.call_args[0]
+        # / second fetchrow call is the INSERT
+        args = mock_conn.fetchrow.call_args_list[1][0]
         assert args[4] == Decimal("0.42")
 
     @pytest.mark.asyncio
     async def test_details_json_dumped(self):
         mock_conn = AsyncMock()
-        mock_conn.fetchrow.return_value = {"id": 1}
+        mock_conn.fetchrow.side_effect = [None, {"id": 1}]
         pool = _mock_pool(mock_conn)
 
         details = {"reason": "oversold"}
         await store_trade_signal(pool, "s1", "X", "buy", 0.5, None, details)
-        args = mock_conn.fetchrow.call_args[0]
+        args = mock_conn.fetchrow.call_args_list[1][0]
         assert args[6] == details
 
     @pytest.mark.asyncio
     async def test_sql_has_pending_status(self):
         mock_conn = AsyncMock()
-        mock_conn.fetchrow.return_value = {"id": 1}
+        mock_conn.fetchrow.side_effect = [None, {"id": 1}]
         pool = _mock_pool(mock_conn)
 
         await store_trade_signal(pool, "s1", "X", "buy", 0.5, None)
