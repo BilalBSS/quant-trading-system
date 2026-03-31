@@ -492,7 +492,10 @@ class TestEvolutionLoop:
     async def test_evolution_loop_runs_engine_after_wait(self):
         # / verify evolution engine is called when wait expires (not stopped)
         orch = AgentOrchestrator()
-        orch._pool = _mock_pool()
+        pool = _mock_pool()
+        # / mock fetchval to return 10 (passes 5-strategy gate)
+        pool.acquire.return_value.__aenter__.return_value.fetchval = AsyncMock(return_value=10)
+        orch._pool = pool
 
         call_count = 0
         wait_call_count = 0
