@@ -539,7 +539,8 @@ class TestDeepseekLoop:
         with patch.object(orch, "_wait_or_stop", side_effect=_fake_wait):
             await orch._deepseek_loop()
 
-        assert wait_calls[0] == DEEPSEEK_INTERVAL
+        # / first run uses shorter initial delay (120s), not full interval
+        assert wait_calls[0] == 120
         assert run_calls == 1
 
     @pytest.mark.asyncio
