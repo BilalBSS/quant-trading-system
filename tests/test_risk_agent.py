@@ -29,11 +29,12 @@ def _mock_pool(mock_conn=None):
 def _make_signal_row(
     symbol: str = "AAPL", signal_type: str = "buy",
     strength: float = 0.7, strategy_id: str = "strat_001",
+    details: dict | None = None,
 ) -> dict:
     return {
         "id": 1, "symbol": symbol, "signal_type": signal_type,
         "strength": strength, "strategy_id": strategy_id,
-        "regime": "bull", "details": None, "status": "pending",
+        "regime": "bull", "details": details, "status": "pending",
     }
 
 
@@ -166,7 +167,7 @@ class TestRiskAgentApproval:
     @pytest.mark.asyncio
     async def test_sell_signal_approved(self):
         mock_conn = AsyncMock()
-        mock_conn.fetchrow.return_value = _make_signal_row(signal_type="sell")
+        mock_conn.fetchrow.return_value = _make_signal_row(signal_type="sell", details={"qty": 10})
         pool = _mock_pool(mock_conn)
         broker = _make_broker(positions=[_make_position(symbol="AAPL")])
 
