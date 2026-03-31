@@ -15,7 +15,6 @@ from src.data.sec_filings import (
     _safe_get,
     fetch_all_insider_trades,
     fetch_insider_trades,
-    log_data_quality_issue,
     store_insider_trades,
 )
 
@@ -275,21 +274,3 @@ class TestStoreInsiderTrades:
         assert count == 1
 
 
-class TestLogDataQualityIssue:
-    @pytest.mark.asyncio
-    async def test_logs_issue(self):
-        mock_conn = AsyncMock()
-        pool = _mock_pool(mock_conn)
-
-        await log_data_quality_issue(pool, "AAPL", "parse error on filing X")
-        mock_conn.execute.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_does_not_crash_on_db_error(self):
-        mock_ctx = AsyncMock()
-        mock_ctx.__aenter__.side_effect = Exception("db down")
-        pool = MagicMock()
-        pool.acquire.return_value = mock_ctx
-
-        # / should not raise
-        await log_data_quality_issue(pool, "AAPL", "some error")

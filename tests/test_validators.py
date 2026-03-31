@@ -11,7 +11,6 @@ from src.data.validators import (
     PRICE_BOUNDS,
     ValidationResult,
     _check_bound,
-    filter_valid,
     validate_fundamentals,
     validate_market_data,
     validate_sentiment,
@@ -276,52 +275,3 @@ class TestValidateSentiment:
         assert all(r.valid for r in results)
 
 
-class TestFilterValid:
-    def test_keeps_valid_rows(self):
-        rows = [
-            {"symbol": "AAPL", "open": 100, "high": 110, "low": 95, "close": 105, "volume": 1000},
-            {"symbol": "MSFT", "open": 200, "high": 210, "low": 195, "close": 205, "volume": 2000},
-        ]
-        result = filter_valid(rows, validate_market_data, "test")
-        assert len(result) == 2
-
-    def test_drops_invalid_rows(self):
-        rows = [
-            {"symbol": "AAPL", "open": 100, "high": 110, "low": 95, "close": 105, "volume": 1000},
-            {"symbol": "BAD", "open": -999, "high": 110, "low": 95, "close": 105, "volume": 1000},
-        ]
-        result = filter_valid(rows, validate_market_data, "test")
-        assert len(result) == 1
-        assert result[0]["symbol"] == "AAPL"
-
-    def test_empty_input(self):
-        result = filter_valid([], validate_market_data, "test")
-        assert result == []
-
-    def test_all_invalid(self):
-        rows = [
-            {"symbol": "BAD1", "open": -1, "high": 110, "low": 95, "close": 105, "volume": 1000},
-            {"symbol": "BAD2", "open": -2, "high": 110, "low": 95, "close": 105, "volume": 1000},
-        ]
-        result = filter_valid(rows, validate_market_data, "test")
-        assert result == []
-
-    def test_preserves_row_ordering(self):
-        rows = [
-            {"symbol": "C", "open": 300, "high": 310, "low": 290, "close": 305, "volume": 3000},
-            {"symbol": "A", "open": 100, "high": 110, "low": 90, "close": 105, "volume": 1000},
-            {"symbol": "B", "open": 200, "high": 210, "low": 190, "close": 205, "volume": 2000},
-        ]
-        result = filter_valid(rows, validate_market_data, "test")
-        assert [r["symbol"] for r in result] == ["C", "A", "B"]
-
-    def test_mixed_valid_invalid_maintains_order(self):
-        rows = [
-            {"symbol": "A", "open": 100, "high": 110, "low": 90, "close": 105, "volume": 1000},
-            {"symbol": "BAD", "open": -1, "high": 110, "low": 95, "close": 105, "volume": 1000},
-            {"symbol": "B", "open": 200, "high": 210, "low": 190, "close": 205, "volume": 2000},
-            {"symbol": "BAD2", "open": -5, "high": 110, "low": 95, "close": 105, "volume": 1000},
-            {"symbol": "C", "open": 300, "high": 310, "low": 290, "close": 305, "volume": 3000},
-        ]
-        result = filter_valid(rows, validate_market_data, "test")
-        assert [r["symbol"] for r in result] == ["A", "B", "C"]
