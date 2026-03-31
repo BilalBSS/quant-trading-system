@@ -6,7 +6,6 @@ from src.data.symbols import (
     CRYPTO_UNIVERSE,
     EQUITY_UNIVERSE,
     FULL_UNIVERSE,
-    from_alpaca,
     is_crypto,
     market_type,
     resolve_universe,
@@ -34,25 +33,6 @@ class TestToAlpaca:
 
     def test_crypto_usdt_pair(self):
         assert to_alpaca("BTC-USDT") == "BTC/USDT"
-
-
-class TestFromAlpaca:
-    """Convert Alpaca API format to internal format."""
-
-    def test_crypto_btc(self):
-        assert from_alpaca("BTC/USD") == "BTC-USD"
-
-    def test_crypto_eth(self):
-        assert from_alpaca("ETH/USD") == "ETH-USD"
-
-    def test_equity_passthrough(self):
-        assert from_alpaca("AAPL") == "AAPL"
-
-    def test_roundtrip_crypto(self):
-        assert from_alpaca(to_alpaca("BTC-USD")) == "BTC-USD"
-
-    def test_roundtrip_equity(self):
-        assert from_alpaca(to_alpaca("MSFT")) == "MSFT"
 
 
 class TestIsCrypto:
@@ -172,12 +152,6 @@ class TestResolveUniverse:
     def test_crypto_returns_crypto_universe(self):
         result = resolve_universe("crypto")
         assert result == CRYPTO_UNIVERSE
-
-
-class TestRoundtrip:
-    def test_all_full_universe_symbols_roundtrip(self):
-        for sym in FULL_UNIVERSE:
-            assert from_alpaca(to_alpaca(sym)) == sym, f"{sym} failed roundtrip"
 
 
 class TestSectors:

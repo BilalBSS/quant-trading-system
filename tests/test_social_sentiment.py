@@ -5,10 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.data.social_sentiment import (
     _fetch_vix_sync,
-    compute_social_score,
     fetch_apewisdom,
     fetch_fear_greed_index,
-    fetch_reddit_sentiment,
     fetch_stocktwits_sentiment,
     fetch_vix,
     run_social_sentiment,
@@ -199,13 +197,6 @@ class TestFetchFearGreedIndex:
             assert result["normalized"] <= 1.0
 
 
-class TestFetchRedditSentiment:
-    @pytest.mark.asyncio
-    async def test_returns_none_placeholder(self):
-        result = await fetch_reddit_sentiment("AAPL")
-        assert result is None
-
-
 class TestStoreSocialSentiment:
     @pytest.mark.asyncio
     async def test_stores_to_db(self):
@@ -235,68 +226,6 @@ class TestStoreSocialSentiment:
         sql = conn.execute.call_args[0][0]
         assert "ON CONFLICT" in sql
         assert "DO UPDATE" in sql
-
-
-class TestComputeSocialScore:
-    @pytest.mark.asyncio
-    async def test_both_sources(self):
-        st_data = {"bullish_pct": 0.7, "bearish_pct": 0.3, "volume": 5, "raw_score": 0.4}
-        fng_data = {"raw_value": 75.0, "normalized": 0.5}
-
-        with patch("src.data.social_sentiment.fetch_stocktwits_sentiment", new_callable=AsyncMock, return_value=st_data):
-            with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=fng_data):
-                score = await compute_social_score("AAPL")
-                # / weighted: (0.4 * 0.6 + 0.5 * 0.4) / 1.0 = 0.44
-                assert score == pytest.approx(0.44)
-
-    @pytest.mark.asyncio
-    async def test_stocktwits_only(self):
-        st_data = {"bullish_pct": 0.9, "bearish_pct": 0.1, "volume": 10, "raw_score": 0.8}
-
-        with patch("src.data.social_sentiment.fetch_stocktwits_sentiment", new_callable=AsyncMock, return_value=st_data):
-            with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=None):
-                score = await compute_social_score("TSLA")
-                # / only stocktwits: 0.8 * 0.6 / 0.6 = 0.8
-                assert score == pytest.approx(0.8)
-
-    @pytest.mark.asyncio
-    async def test_fng_only(self):
-        fng_data = {"raw_value": 25.0, "normalized": -0.5}
-
-        with patch("src.data.social_sentiment.fetch_stocktwits_sentiment", new_callable=AsyncMock, return_value=None):
-            with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=fng_data):
-                score = await compute_social_score("SPY")
-                # / only fng: -0.5 * 0.4 / 0.4 = -0.5
-                assert score == pytest.approx(-0.5)
-
-    @pytest.mark.asyncio
-    async def test_no_sources_returns_zero(self):
-        with patch("src.data.social_sentiment.fetch_stocktwits_sentiment", new_callable=AsyncMock, return_value=None):
-            with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=None):
-                score = await compute_social_score("NOPE")
-                assert score == 0.0
-
-    @pytest.mark.asyncio
-    async def test_score_clamped(self):
-        # / extreme values still bounded
-        st_data = {"bullish_pct": 1.0, "bearish_pct": 0.0, "volume": 100, "raw_score": 1.0}
-        fng_data = {"raw_value": 100.0, "normalized": 1.0}
-
-        with patch("src.data.social_sentiment.fetch_stocktwits_sentiment", new_callable=AsyncMock, return_value=st_data):
-            with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=fng_data):
-                score = await compute_social_score("MOON")
-                assert -1.0 <= score <= 1.0
-
-    @pytest.mark.asyncio
-    async def test_negative_score(self):
-        st_data = {"bullish_pct": 0.1, "bearish_pct": 0.9, "volume": 20, "raw_score": -0.8}
-        fng_data = {"raw_value": 10.0, "normalized": -0.8}
-
-        with patch("src.data.social_sentiment.fetch_stocktwits_sentiment", new_callable=AsyncMock, return_value=st_data):
-            with patch("src.data.social_sentiment.fetch_fear_greed_index", new_callable=AsyncMock, return_value=fng_data):
-                score = await compute_social_score("DUMP")
-                # / ((-0.8 * 0.6) + (-0.8 * 0.4)) / 1.0 = -0.8
-                assert score == pytest.approx(-0.8)
 
 
 class TestRunSocialSentiment:

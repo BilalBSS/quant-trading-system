@@ -11,7 +11,6 @@ import pytest
 
 from src.agents.tools import (
     _STATUS_TABLES,
-    analysis_data_to_dict,
     dict_to_analysis_data,
     fetch_analysis_score,
     fetch_daily_synthesis,
@@ -28,8 +27,6 @@ from src.agents.tools import (
     store_trade_signal,
     update_trade_status,
 )
-from src.strategies.base_strategy import AnalysisData
-
 
 def _mock_pool(mock_conn):
     mock_ctx = AsyncMock()
@@ -565,59 +562,9 @@ class TestFetchRecentTrades:
         assert result == []
 
 
-# -- analysis_data_to_dict / dict_to_analysis_data --
+# -- dict_to_analysis_data --
 
-class TestAnalysisDataRoundTrip:
-    def test_full_roundtrip(self):
-        data = AnalysisData(
-            pe_ratio=25.0,
-            pe_forward=22.0,
-            ps_ratio=8.0,
-            peg_ratio=1.5,
-            revenue_growth=0.12,
-            fcf_margin=0.20,
-            debt_to_equity=0.8,
-            sector_pe_avg=30.0,
-            sector_ps_avg=10.0,
-            dcf_upside=0.15,
-            insider_net_buy_ratio=0.6,
-            earnings_surprise_pct=5.0,
-            consecutive_beats=3,
-            fundamental_score=75.0,
-        )
-        d = analysis_data_to_dict(data)
-        restored = dict_to_analysis_data(d)
-        assert restored == data
-
-    def test_all_none_roundtrip(self):
-        data = AnalysisData()
-        d = analysis_data_to_dict(data)
-        restored = dict_to_analysis_data(d)
-        assert restored == data
-        assert restored.consecutive_beats == 0
-
-    def test_partial_data_roundtrip(self):
-        data = AnalysisData(pe_ratio=20.0, fundamental_score=60.0)
-        d = analysis_data_to_dict(data)
-        restored = dict_to_analysis_data(d)
-        assert restored.pe_ratio == 20.0
-        assert restored.fundamental_score == 60.0
-        assert restored.ps_ratio is None
-
-    def test_dict_has_all_keys(self):
-        data = AnalysisData()
-        d = analysis_data_to_dict(data)
-        expected_keys = {
-            "pe_ratio", "pe_forward", "ps_ratio", "peg_ratio",
-            "revenue_growth", "fcf_margin", "debt_to_equity",
-            "sector_pe_avg", "sector_ps_avg", "dcf_upside",
-            "insider_net_buy_ratio", "earnings_surprise_pct",
-            "consecutive_beats", "fundamental_score",
-            "nvt_ratio", "funding_rate", "exchange_flow_ratio",
-            "news_sentiment_score", "ai_consensus", "regime",
-        }
-        assert set(d.keys()) == expected_keys
-
+class TestDictToAnalysisData:
     def test_consecutive_beats_default(self):
         # / missing key defaults to 0
         d = {"pe_ratio": 10.0}
