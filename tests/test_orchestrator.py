@@ -243,6 +243,7 @@ class TestWaitOrStop:
 # / agent loop tests
 # ---------------------------------------------------------------------------
 
+@pytest.mark.timeout(10)
 class TestAnalystLoop:
     @pytest.mark.asyncio
     async def test_analyst_loop_runs_and_waits(self):
@@ -306,6 +307,7 @@ class TestAnalystLoop:
         assert intervals_seen[0] == ANALYST_OFF_HOURS
 
 
+@pytest.mark.timeout(10)
 class TestStrategyLoop:
     @pytest.mark.asyncio
     async def test_strategy_loop_runs_and_waits(self):
@@ -329,6 +331,7 @@ class TestStrategyLoop:
         assert call_count == 1
 
 
+@pytest.mark.timeout(10)
 class TestRiskPollLoop:
     @pytest.mark.asyncio
     async def test_risk_poll_processes_pending(self):
@@ -357,6 +360,7 @@ class TestRiskPollLoop:
         assert process_calls == [1, 2]
 
 
+@pytest.mark.timeout(10)
 class TestExecutorPollLoop:
     @pytest.mark.asyncio
     async def test_executor_poll_processes_pending(self):
@@ -388,6 +392,7 @@ class TestExecutorPollLoop:
 # / error resilience tests
 # ---------------------------------------------------------------------------
 
+@pytest.mark.timeout(10)
 class TestLoopErrorResilience:
     @pytest.mark.asyncio
     async def test_analyst_loop_error_does_not_crash(self):
@@ -468,6 +473,7 @@ class TestLoopErrorResilience:
 # / evolution loop tests
 # ---------------------------------------------------------------------------
 
+@pytest.mark.timeout(10)
 class TestEvolutionLoop:
     @pytest.mark.asyncio
     async def test_evolution_loop_calculates_midnight(self):
@@ -522,6 +528,7 @@ class TestEvolutionLoop:
 # / deepseek loop tests
 # ---------------------------------------------------------------------------
 
+@pytest.mark.timeout(10)
 class TestDeepseekLoop:
     @pytest.mark.asyncio
     async def test_deepseek_loop_waits_then_runs(self):
@@ -576,6 +583,7 @@ class TestDeepseekLoop:
 # / reasoner loop tests
 # ---------------------------------------------------------------------------
 
+@pytest.mark.timeout(10)
 class TestReasonerLoop:
     @pytest.mark.asyncio
     async def test_reasoner_loop_calculates_5pm_wait(self):
