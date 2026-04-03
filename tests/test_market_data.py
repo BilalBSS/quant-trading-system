@@ -110,10 +110,8 @@ class TestFetchBarsAlpaca:
 
         mock_client = AsyncMock()
         mock_client.get.return_value = mock_response
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("src.data.market_data.httpx.AsyncClient", return_value=mock_client):
+        with patch("src.data.market_data.get_alpaca_client", return_value=mock_client):
             with patch("src.data.market_data._rate_delay", 0):
                 bars = await fetch_bars_alpaca("AAPL", date(2024, 1, 1), date(2024, 1, 31))
 
@@ -135,10 +133,8 @@ class TestFetchBarsAlpaca:
 
         mock_client = AsyncMock()
         mock_client.get.return_value = mock_response
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("src.data.market_data.httpx.AsyncClient", return_value=mock_client):
+        with patch("src.data.market_data.get_alpaca_client", return_value=mock_client):
             with patch("src.data.market_data._rate_delay", 0):
                 bars = await fetch_bars_alpaca("BTC-USD", date(2024, 1, 1), date(2024, 1, 31))
 
@@ -162,10 +158,8 @@ class TestFetchBarsAlpaca:
 
         mock_client = AsyncMock()
         mock_client.get.side_effect = [page1, page2]
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("src.data.market_data.httpx.AsyncClient", return_value=mock_client):
+        with patch("src.data.market_data.get_alpaca_client", return_value=mock_client):
             with patch("src.data.market_data._rate_delay", 0):
                 bars = await fetch_bars_alpaca("AAPL", date(2024, 1, 1), date(2024, 1, 31))
 
@@ -433,10 +427,8 @@ class TestFetchLatestQuote:
 
         mock_client = AsyncMock()
         mock_client.get.return_value = mock_response
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("src.data.market_data.httpx.AsyncClient", return_value=mock_client):
+        with patch("src.data.market_data.get_alpaca_client", return_value=mock_client):
             result = await fetch_latest_quote("AAPL")
             assert result["symbol"] == "AAPL"
             assert result["price"] == Decimal("150.25")
@@ -451,10 +443,8 @@ class TestFetchLatestQuote:
 
         mock_client = AsyncMock()
         mock_client.get.return_value = mock_response
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("src.data.market_data.httpx.AsyncClient", return_value=mock_client):
+        with patch("src.data.market_data.get_alpaca_client", return_value=mock_client):
             result = await fetch_latest_quote("BTC-USD")
             assert result["symbol"] == "BTC-USD"
             assert result["price"] == Decimal("42000.50")
