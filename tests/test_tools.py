@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import date
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -26,6 +26,11 @@ from src.agents.tools import (
     store_trade_log,
     store_trade_signal,
     update_trade_status,
+    close_strategy_position,
+    get_strategy_positions,
+    open_strategy_position,
+    sync_strategy_positions_from_alpaca,
+    sync_trades_from_alpaca,
 )
 
 def _mock_pool(mock_conn):
@@ -650,3 +655,438 @@ class TestDailySynthesis:
 
         result = await fetch_daily_synthesis(pool)
         assert result is None
+
+
+# -- open_strategy_position --
+
+class TestOpenStrategyPosition:
+    @pytest.mark.asyncio
+    async def test_inserts_new_position(self):
+        mock_conn = AsyncMock()
+        pool = _mock_pool(mock_conn)
+
+        await open_strategy_position(pool, "strat_001", "AAPL", 10.0, 150.0)
+        args = mock_conn.execute.call_args[0]
+        assert "INSERT INTO strategy_positions" in args[0]
+        assert args[1] == "strat_001"
+        assert args[2] == "AAPL"
+        assert args[3] == Decimal("10.0")
+        assert args[4] == Decimal("150.0")
+
+    @pytest.mark.asyncio
+    async def test_upsert_sql_averages_entry_price(self):
+        # / ON CONFLICT recalculates weighted avg entry
+        mock_conn = AsyncMock()
+        pool = _mock_pool(mock_conn)
+
+        await open_strategy_position(pool, "strat_001", "MSFT", 5.0, 300.0)
+        sql = mock_conn.execute.call_args[0][0]
+        assert "ON CONFLICT" in sql
+        assert "avg_entry_price" in sql
+        assert "NULLIF" in sql
+
+    @pytest.mark.asyncio
+    async def test_zero_qty(self):
+        # / zero qty still executes — db NULLIF prevents division by zero
+        mock_conn = AsyncMock()
+        pool = _mock_pool(mock_conn)
+
+        await open_strategy_position(pool, "strat_001", "GOOG", 0.0, 100.0)
+        args = mock_conn.execute.call_args[0]
+        assert args[3] == Decimal("0.0")
+
+
+# -- close_strategy_position --
+
+def _mock_pool_with_transaction(mock_conn):
+    # / close_strategy_position uses conn.transaction() inside pool.acquire()
+    # / transaction() is a sync call returning an async context manager
+    mock_txn = MagicMock()
+    mock_txn.__aenter__ = AsyncMock(return_value=None)
+    mock_txn.__aexit__ = AsyncMock(return_value=False)
+    mock_conn.transaction = MagicMock(return_value=mock_txn)
+
+    mock_ctx = AsyncMock()
+    mock_ctx.__aenter__.return_value = mock_conn
+    mock_ctx.__aexit__.return_value = False
+    pool = MagicMock()
+    pool.acquire.return_value = mock_ctx
+    return pool
+
+
+class TestCloseStrategyPosition:
+    @pytest.mark.asyncio
+    async def test_full_close_deletes_row(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow.return_value = {"qty": Decimal("10"), "avg_entry_price": Decimal("150.50")}
+        pool = _mock_pool_with_transaction(mock_conn)
+
+        result = await close_strategy_position(pool, "strat_001", "AAPL", 10.0)
+        assert result == 150.50
+        # / should DELETE, not UPDATE
+        delete_sql = mock_conn.execute.call_args[0][0]
+        assert "DELETE" in delete_sql
+
+    @pytest.mark.asyncio
+    async def test_partial_close_updates_qty(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow.return_value = {"qty": Decimal("10"), "avg_entry_price": Decimal("200.0")}
+        pool = _mock_pool_with_transaction(mock_conn)
+
+        result = await close_strategy_position(pool, "strat_001", "MSFT", 3.0)
+        assert result == 200.0
+        # / should UPDATE with remaining = 7.0
+        update_call = mock_conn.execute.call_args[0]
+        assert "UPDATE" in update_call[0]
+        assert update_call[1] == Decimal("7.0")
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_position(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow.return_value = None
+        pool = _mock_pool_with_transaction(mock_conn)
+
+        result = await close_strategy_position(pool, "strat_001", "FAKE", 5.0)
+        assert result is None
+        # / no execute call after fetchrow returned None
+        mock_conn.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_overclose_deletes_row(self):
+        # / closing more than held qty still deletes
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow.return_value = {"qty": Decimal("5"), "avg_entry_price": Decimal("100.0")}
+        pool = _mock_pool_with_transaction(mock_conn)
+
+        result = await close_strategy_position(pool, "strat_001", "TSLA", 20.0)
+        assert result == 100.0
+        delete_sql = mock_conn.execute.call_args[0][0]
+        assert "DELETE" in delete_sql
+
+
+# -- get_strategy_positions --
+
+class TestGetStrategyPositions:
+    @pytest.mark.asyncio
+    async def test_returns_positions_for_strategy(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = [
+            {"strategy_id": "s1", "symbol": "AAPL", "qty": Decimal("10"), "avg_entry_price": Decimal("150.0")},
+            {"strategy_id": "s1", "symbol": "MSFT", "qty": Decimal("5"), "avg_entry_price": Decimal("300.0")},
+        ]
+        pool = _mock_pool(mock_conn)
+
+        result = await get_strategy_positions(pool, strategy_id="s1")
+        assert len(result) == 2
+        assert result[0]["symbol"] == "AAPL"
+        assert result[0]["qty"] == 10.0
+        assert result[1]["avg_entry_price"] == 300.0
+
+    @pytest.mark.asyncio
+    async def test_empty_result(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = []
+        pool = _mock_pool(mock_conn)
+
+        result = await get_strategy_positions(pool, strategy_id="nonexistent")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_filters_by_symbol(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = [
+            {"strategy_id": "s1", "symbol": "AAPL", "qty": Decimal("10"), "avg_entry_price": Decimal("150.0")},
+        ]
+        pool = _mock_pool(mock_conn)
+
+        await get_strategy_positions(pool, strategy_id="s1", symbol="AAPL")
+        sql = mock_conn.fetch.call_args[0][0]
+        assert "strategy_id" in sql
+        assert "symbol" in sql
+        args = mock_conn.fetch.call_args[0]
+        assert args[1] == "s1"
+        assert args[2] == "AAPL"
+
+    @pytest.mark.asyncio
+    async def test_symbol_only_filter(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = []
+        pool = _mock_pool(mock_conn)
+
+        await get_strategy_positions(pool, symbol="NVDA")
+        sql = mock_conn.fetch.call_args[0][0]
+        assert "symbol" in sql
+        # / should not filter by strategy_id
+        assert "strategy_id = $" not in sql
+
+    @pytest.mark.asyncio
+    async def test_no_filters_returns_all(self):
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = []
+        pool = _mock_pool(mock_conn)
+
+        await get_strategy_positions(pool)
+        sql = mock_conn.fetch.call_args[0][0]
+        assert "WHERE" not in sql
+
+    @pytest.mark.asyncio
+    async def test_none_avg_entry_price(self):
+        # / avg_entry_price can be None (e.g. after zero-qty division)
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = [
+            {"strategy_id": "s1", "symbol": "X", "qty": Decimal("1"), "avg_entry_price": None},
+        ]
+        pool = _mock_pool(mock_conn)
+
+        result = await get_strategy_positions(pool, strategy_id="s1")
+        assert result[0]["avg_entry_price"] is None
+
+
+# -- sync_trades_from_alpaca --
+
+class TestSyncTradesFromAlpaca:
+    @pytest.mark.asyncio
+    @patch("src.data.alpaca_client.get_alpaca_client")
+    @patch("src.data.alpaca_client.alpaca_headers")
+    @patch("src.data.alpaca_client.alpaca_base_url")
+    async def test_syncs_new_trades(self, mock_base_url, mock_headers, mock_get_client):
+        mock_base_url.return_value = "https://paper-api.alpaca.markets"
+        mock_headers.return_value = {"APCA-API-KEY-ID": "test"}
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = [
+            {"id": "ord_1", "symbol": "AAPL", "side": "buy", "filled_qty": "10",
+             "filled_avg_price": "150.0", "filled_at": "2026-04-01T10:00:00Z",
+             "type": "market", "time_in_force": "day"},
+        ]
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_resp
+        mock_get_client.return_value = mock_client
+
+        # / first acquire: lookup existing order_ids (none exist)
+        # / second acquire: insert new trades
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = []  # / no existing orders
+
+        # / need two acquire calls — pool returns same conn for both
+        pool = _mock_pool(mock_conn)
+
+        result = await sync_trades_from_alpaca(pool)
+        assert result == 1
+        # / should have called execute to insert the trade
+        assert mock_conn.execute.call_count == 1
+
+    @pytest.mark.asyncio
+    @patch("src.data.alpaca_client.get_alpaca_client")
+    @patch("src.data.alpaca_client.alpaca_headers")
+    @patch("src.data.alpaca_client.alpaca_base_url")
+    async def test_skips_existing_trades(self, mock_base_url, mock_headers, mock_get_client):
+        mock_base_url.return_value = "https://paper-api.alpaca.markets"
+        mock_headers.return_value = {}
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = [
+            {"id": "ord_1", "symbol": "AAPL", "side": "buy", "filled_qty": "10",
+             "filled_avg_price": "150.0", "filled_at": "2026-04-01T10:00:00Z",
+             "type": "market", "time_in_force": "day"},
+        ]
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_resp
+        mock_get_client.return_value = mock_client
+
+        mock_conn = AsyncMock()
+        # / ord_1 already in trade_log
+        mock_conn.fetch.return_value = [{"order_id": "ord_1"}]
+        pool = _mock_pool(mock_conn)
+
+        result = await sync_trades_from_alpaca(pool)
+        assert result == 0
+        mock_conn.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("src.data.alpaca_client.get_alpaca_client")
+    @patch("src.data.alpaca_client.alpaca_headers")
+    @patch("src.data.alpaca_client.alpaca_base_url")
+    async def test_handles_empty_orders(self, mock_base_url, mock_headers, mock_get_client):
+        mock_base_url.return_value = "https://paper-api.alpaca.markets"
+        mock_headers.return_value = {}
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = []
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_resp
+        mock_get_client.return_value = mock_client
+
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = []
+        pool = _mock_pool(mock_conn)
+
+        result = await sync_trades_from_alpaca(pool)
+        assert result == 0
+
+    @pytest.mark.asyncio
+    @patch("src.data.alpaca_client.get_alpaca_client")
+    @patch("src.data.alpaca_client.alpaca_headers")
+    @patch("src.data.alpaca_client.alpaca_base_url")
+    async def test_api_failure_returns_zero(self, mock_base_url, mock_headers, mock_get_client):
+        mock_base_url.return_value = "https://paper-api.alpaca.markets"
+        mock_headers.return_value = {}
+        mock_get_client.side_effect = Exception("connection refused")
+
+        pool = MagicMock()
+        result = await sync_trades_from_alpaca(pool)
+        assert result == 0
+
+    @pytest.mark.asyncio
+    @patch("src.data.alpaca_client.get_alpaca_client")
+    @patch("src.data.alpaca_client.alpaca_headers")
+    @patch("src.data.alpaca_client.alpaca_base_url")
+    async def test_skips_zero_qty_orders(self, mock_base_url, mock_headers, mock_get_client):
+        mock_base_url.return_value = "https://paper-api.alpaca.markets"
+        mock_headers.return_value = {}
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = [
+            {"id": "ord_1", "symbol": "AAPL", "side": "buy", "filled_qty": "0",
+             "filled_avg_price": "150.0", "filled_at": None,
+             "type": "market", "time_in_force": "day"},
+        ]
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_resp
+        mock_get_client.return_value = mock_client
+
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = []
+        pool = _mock_pool(mock_conn)
+
+        result = await sync_trades_from_alpaca(pool)
+        assert result == 0
+        mock_conn.execute.assert_not_called()
+
+
+# -- sync_strategy_positions_from_alpaca --
+
+class TestSyncStrategyPositionsFromAlpaca:
+    @pytest.mark.asyncio
+    @patch("src.agents.tools.open_strategy_position")
+    @patch("src.data.alpaca_client.get_alpaca_client")
+    @patch("src.data.alpaca_client.alpaca_headers")
+    @patch("src.data.alpaca_client.alpaca_base_url")
+    async def test_bootstraps_untracked_positions(self, mock_base_url, mock_headers, mock_get_client, mock_open):
+        mock_base_url.return_value = "https://paper-api.alpaca.markets"
+        mock_headers.return_value = {}
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = [
+            {"symbol": "AAPL", "qty": "10", "avg_entry_price": "150.0"},
+        ]
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_resp
+        mock_get_client.return_value = mock_client
+
+        mock_conn = AsyncMock()
+        # / no tracked positions in db
+        mock_conn.fetch.return_value = []
+        pool = _mock_pool(mock_conn)
+
+        result = await sync_strategy_positions_from_alpaca(pool)
+        assert result == 1
+        mock_open.assert_called_once_with(pool, "untracked", "AAPL", 10.0, 150.0)
+
+    @pytest.mark.asyncio
+    @patch("src.agents.tools.open_strategy_position")
+    @patch("src.data.alpaca_client.get_alpaca_client")
+    @patch("src.data.alpaca_client.alpaca_headers")
+    @patch("src.data.alpaca_client.alpaca_base_url")
+    async def test_skips_already_tracked(self, mock_base_url, mock_headers, mock_get_client, mock_open):
+        mock_base_url.return_value = "https://paper-api.alpaca.markets"
+        mock_headers.return_value = {}
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = [
+            {"symbol": "AAPL", "qty": "10", "avg_entry_price": "150.0"},
+        ]
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_resp
+        mock_get_client.return_value = mock_client
+
+        mock_conn = AsyncMock()
+        # / db already tracks 10 shares of AAPL
+        mock_conn.fetch.return_value = [{"symbol": "AAPL", "total_qty": Decimal("10")}]
+        pool = _mock_pool(mock_conn)
+
+        result = await sync_strategy_positions_from_alpaca(pool)
+        assert result == 0
+        mock_open.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("src.data.alpaca_client.get_alpaca_client")
+    @patch("src.data.alpaca_client.alpaca_headers")
+    @patch("src.data.alpaca_client.alpaca_base_url")
+    async def test_api_failure_returns_zero(self, mock_base_url, mock_headers, mock_get_client):
+        mock_base_url.return_value = "https://paper-api.alpaca.markets"
+        mock_headers.return_value = {}
+        mock_get_client.side_effect = Exception("timeout")
+
+        pool = MagicMock()
+        result = await sync_strategy_positions_from_alpaca(pool)
+        assert result == 0
+
+    @pytest.mark.asyncio
+    @patch("src.agents.tools.open_strategy_position")
+    @patch("src.data.alpaca_client.get_alpaca_client")
+    @patch("src.data.alpaca_client.alpaca_headers")
+    @patch("src.data.alpaca_client.alpaca_base_url")
+    async def test_skips_zero_qty_positions(self, mock_base_url, mock_headers, mock_get_client, mock_open):
+        mock_base_url.return_value = "https://paper-api.alpaca.markets"
+        mock_headers.return_value = {}
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = [
+            {"symbol": "AAPL", "qty": "0", "avg_entry_price": "150.0"},
+        ]
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_resp
+        mock_get_client.return_value = mock_client
+
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = []
+        pool = _mock_pool(mock_conn)
+
+        result = await sync_strategy_positions_from_alpaca(pool)
+        assert result == 0
+        mock_open.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch("src.agents.tools.open_strategy_position")
+    @patch("src.data.alpaca_client.get_alpaca_client")
+    @patch("src.data.alpaca_client.alpaca_headers")
+    @patch("src.data.alpaca_client.alpaca_base_url")
+    async def test_partial_untracked_qty(self, mock_base_url, mock_headers, mock_get_client, mock_open):
+        # / alpaca has 10, db tracks 6 -> should insert 4 as untracked
+        mock_base_url.return_value = "https://paper-api.alpaca.markets"
+        mock_headers.return_value = {}
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = [
+            {"symbol": "MSFT", "qty": "10", "avg_entry_price": "400.0"},
+        ]
+        mock_client = AsyncMock()
+        mock_client.get.return_value = mock_resp
+        mock_get_client.return_value = mock_client
+
+        mock_conn = AsyncMock()
+        mock_conn.fetch.return_value = [{"symbol": "MSFT", "total_qty": Decimal("6")}]
+        pool = _mock_pool(mock_conn)
+
+        result = await sync_strategy_positions_from_alpaca(pool)
+        assert result == 1
+        mock_open.assert_called_once_with(pool, "untracked", "MSFT", 4.0, 400.0)

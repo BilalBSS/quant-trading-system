@@ -9,6 +9,9 @@ import pytest
 from src.brokers.alpaca_broker import AlpacaBroker, _parse_order
 from src.brokers.base import Order
 
+# / patch target for shared alpaca client
+_ALPACA_CLIENT_PATCH = "src.brokers.alpaca_broker.get_alpaca_client"
+
 
 def _mock_response(data: dict, status: int = 200):
     resp = MagicMock()
@@ -70,11 +73,9 @@ class TestAlpacaBrokerGetPrice:
         mock_resp = _mock_response({"trade": {"p": 155.25}})
 
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = False
         mock_client.get.return_value = mock_resp
 
-        with patch("src.brokers.alpaca_broker.httpx.AsyncClient", return_value=mock_client):
+        with patch(_ALPACA_CLIENT_PATCH, return_value=mock_client):
             with patch.dict("os.environ", {"ALPACA_API_KEY": "test", "ALPACA_SECRET_KEY": "test"}):
                 price = await broker.get_price("AAPL")
         assert price == 155.25
@@ -85,11 +86,9 @@ class TestAlpacaBrokerGetPrice:
         mock_resp = _mock_response({"trades": {"BTC/USD": {"p": 65000.0}}})
 
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = False
         mock_client.get.return_value = mock_resp
 
-        with patch("src.brokers.alpaca_broker.httpx.AsyncClient", return_value=mock_client):
+        with patch(_ALPACA_CLIENT_PATCH, return_value=mock_client):
             with patch.dict("os.environ", {"ALPACA_API_KEY": "test", "ALPACA_SECRET_KEY": "test"}):
                 price = await broker.get_price("BTC-USD")
         assert price == 65000.0
@@ -116,11 +115,9 @@ class TestAlpacaBrokerPlaceOrder:
         mock_resp = _mock_response(order_data)
 
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = False
         mock_client.post.return_value = mock_resp
 
-        with patch("src.brokers.alpaca_broker.httpx.AsyncClient", return_value=mock_client):
+        with patch(_ALPACA_CLIENT_PATCH, return_value=mock_client):
             with patch.dict("os.environ", {"ALPACA_API_KEY": "test", "ALPACA_SECRET_KEY": "test"}):
                 order = await broker.place_order("AAPL", 10, "buy")
         assert order.order_id == "order123"
@@ -144,11 +141,9 @@ class TestAlpacaBrokerGetPositions:
         mock_resp = _mock_response(positions_data)
 
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = False
         mock_client.get.return_value = mock_resp
 
-        with patch("src.brokers.alpaca_broker.httpx.AsyncClient", return_value=mock_client):
+        with patch(_ALPACA_CLIENT_PATCH, return_value=mock_client):
             with patch.dict("os.environ", {"ALPACA_API_KEY": "test", "ALPACA_SECRET_KEY": "test"}):
                 positions = await broker.get_positions()
         assert len(positions) == 1
@@ -169,11 +164,9 @@ class TestAlpacaBrokerGetAccount:
         mock_resp = _mock_response(account_data)
 
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = False
         mock_client.get.return_value = mock_resp
 
-        with patch("src.brokers.alpaca_broker.httpx.AsyncClient", return_value=mock_client):
+        with patch(_ALPACA_CLIENT_PATCH, return_value=mock_client):
             with patch.dict("os.environ", {"ALPACA_API_KEY": "test", "ALPACA_SECRET_KEY": "test"}):
                 balance = await broker.get_account_balance()
         assert balance.equity == 100000.0
@@ -188,11 +181,9 @@ class TestAlpacaBrokerCancelOrder:
         mock_resp.status_code = 204
 
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = False
         mock_client.delete.return_value = mock_resp
 
-        with patch("src.brokers.alpaca_broker.httpx.AsyncClient", return_value=mock_client):
+        with patch(_ALPACA_CLIENT_PATCH, return_value=mock_client):
             with patch.dict("os.environ", {"ALPACA_API_KEY": "test", "ALPACA_SECRET_KEY": "test"}):
                 result = await broker.cancel_order("order123")
         assert result is True
@@ -279,11 +270,9 @@ class TestAlpacaBrokerGetPriceDeep:
         mock_resp = _mock_response({"trade": {"p": 0}})
 
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = False
         mock_client.get.return_value = mock_resp
 
-        with patch("src.brokers.alpaca_broker.httpx.AsyncClient", return_value=mock_client):
+        with patch(_ALPACA_CLIENT_PATCH, return_value=mock_client):
             with patch.dict("os.environ", {"ALPACA_API_KEY": "test", "ALPACA_SECRET_KEY": "test"}):
                 with pytest.raises(Exception):
                     await broker.get_price("AAPL")
@@ -298,11 +287,9 @@ class TestAlpacaBrokerGetPriceDeep:
         mock_resp = _mock_response({"trade": {"p": -5.0}})
 
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = False
         mock_client.get.return_value = mock_resp
 
-        with patch("src.brokers.alpaca_broker.httpx.AsyncClient", return_value=mock_client):
+        with patch(_ALPACA_CLIENT_PATCH, return_value=mock_client):
             with patch.dict("os.environ", {"ALPACA_API_KEY": "test", "ALPACA_SECRET_KEY": "test"}):
                 with pytest.raises(Exception):
                     await broker.get_price("AAPL")
@@ -320,11 +307,9 @@ class TestAlpacaBrokerCancelOrderDeep:
         mock_resp.status_code = 404
 
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = False
         mock_client.delete.return_value = mock_resp
 
-        with patch("src.brokers.alpaca_broker.httpx.AsyncClient", return_value=mock_client):
+        with patch(_ALPACA_CLIENT_PATCH, return_value=mock_client):
             with patch.dict("os.environ", {"ALPACA_API_KEY": "test", "ALPACA_SECRET_KEY": "test"}):
                 result = await broker.cancel_order("nonexistent")
         assert result is False

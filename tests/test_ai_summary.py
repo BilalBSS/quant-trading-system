@@ -208,18 +208,17 @@ class TestGenerateSummary:
     async def test_uses_groq_when_available(self):
         mock_response = MagicMock()
         mock_response.raise_for_status = lambda: None
+        mock_response.status_code = 200
         mock_response.json.return_value = {
             "choices": [{"message": {"content": "Bullish. AAPL shows strong fundamentals."}}],
             "model": "llama-3.1-8b-instant",
         }
 
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = False
         mock_client.post.return_value = mock_response
 
         with patch.dict("os.environ", {"GROQ_API_KEY": "test-key"}):
-            with patch("httpx.AsyncClient", return_value=mock_client):
+            with patch("src.data.llm_client.get_llm_client", return_value=mock_client):
                 result = await generate_summary(
                     "AAPL", ratio=_sample_ratio(),
                 )
@@ -230,18 +229,17 @@ class TestGenerateSummary:
     async def test_bearish_in_first_50_chars(self):
         mock_response = MagicMock()
         mock_response.raise_for_status = lambda: None
+        mock_response.status_code = 200
         mock_response.json.return_value = {
             "choices": [{"message": {"content": "Bearish. AAPL faces headwinds from declining margins and revenue slowdown."}}],
             "model": "llama-3.1-8b-instant",
         }
 
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = False
         mock_client.post.return_value = mock_response
 
         with patch.dict("os.environ", {"GROQ_API_KEY": "test-key"}):
-            with patch("httpx.AsyncClient", return_value=mock_client):
+            with patch("src.data.llm_client.get_llm_client", return_value=mock_client):
                 result = await generate_summary("AAPL", ratio=_sample_ratio())
                 assert result.signal == "bearish"
 
@@ -249,25 +247,26 @@ class TestGenerateSummary:
     async def test_neutral_when_neither_bullish_nor_bearish(self):
         mock_response = MagicMock()
         mock_response.raise_for_status = lambda: None
+        mock_response.status_code = 200
         mock_response.json.return_value = {
             "choices": [{"message": {"content": "Mixed signals. AAPL has balanced fundamentals with no clear direction."}}],
             "model": "llama-3.1-8b-instant",
         }
 
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = False
         mock_client.post.return_value = mock_response
 
         with patch.dict("os.environ", {"GROQ_API_KEY": "test-key"}):
-            with patch("httpx.AsyncClient", return_value=mock_client):
+            with patch("src.data.llm_client.get_llm_client", return_value=mock_client):
                 result = await generate_summary("AAPL", ratio=_sample_ratio())
                 assert result.signal == "neutral"
 
     @pytest.mark.asyncio
     async def test_falls_back_on_api_error(self):
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = Exception("connection error")
         with patch.dict("os.environ", {"GROQ_API_KEY": "test-key"}):
-            with patch("httpx.AsyncClient", side_effect=Exception("connection error")):
+            with patch("src.data.llm_client.get_llm_client", return_value=mock_client):
                 result = await generate_summary(
                     "AAPL", ratio=_sample_ratio(), dcf=_sample_dcf(),
                 )
@@ -305,16 +304,15 @@ class TestGenerateDailySynthesis:
 
         mock_response = MagicMock()
         mock_response.raise_for_status = lambda: None
+        mock_response.status_code = 200
         mock_response.json.return_value = {
             "choices": [{"message": {"content": '{"top_buys": [{"symbol": "AAPL"}], "top_avoids": [], "portfolio_risk": "low", "per_symbol_notes": {}}'}}],
         }
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = False
         mock_client.post.return_value = mock_response
 
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}):
-            with patch("httpx.AsyncClient", return_value=mock_client):
+            with patch("src.data.llm_client.get_llm_client", return_value=mock_client):
                 with patch("src.agents.tools.store_daily_synthesis", new_callable=AsyncMock, return_value=1):
                     result = await generate_daily_synthesis(pool, ["AAPL"])
 
@@ -340,16 +338,15 @@ class TestGenerateDailySynthesis:
 
         mock_response = MagicMock()
         mock_response.raise_for_status = lambda: None
+        mock_response.status_code = 200
         mock_response.json.return_value = {
             "choices": [{"message": {"content": '{"top_buys": [], "top_avoids": [], "portfolio_risk": "none", "per_symbol_notes": {}}'}}],
         }
         mock_client = AsyncMock()
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = False
         mock_client.post.return_value = mock_response
 
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}):
-            with patch("httpx.AsyncClient", return_value=mock_client):
+            with patch("src.data.llm_client.get_llm_client", return_value=mock_client):
                 with patch("src.agents.tools.store_daily_synthesis", new_callable=AsyncMock, return_value=1) as mock_store:
                     await generate_daily_synthesis(pool, ["AAPL"])
                     mock_store.assert_called_once()
