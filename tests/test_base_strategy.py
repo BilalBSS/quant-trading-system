@@ -1467,3 +1467,92 @@ class TestBearMarketOverrides:
         assert s.get_effective_bypass_consensus(regime=None) is True
         assert s.get_effective_bypass_consensus(regime="bear") is True
         assert s.get_effective_bypass_consensus(regime="bull") is True
+
+
+# ---------------------------------------------------------------------------
+# / multi-timeframe entry tests
+# ---------------------------------------------------------------------------
+
+class TestMultiTimeframeEntry:
+    def test_daily_signal_no_intraday_backward_compat(self):
+        # / signals without timeframe field work identically with or without intraday_df
+        cfg = _base_config(entry_conditions={
+            "operator": "AND",
+            "signals": [{"indicator": "sma", "condition": "price_above", "period": 20}],
+        })
+        s = ConfigDrivenStrategy(cfg)
+        data = _ohlcv_rising(150)
+        r1 = s.should_enter("AAPL", data)
+        r2 = s.should_enter("AAPL", data, intraday_df=data)
+        assert r1.should_enter == r2.should_enter
+        assert r1.strength == pytest.approx(r2.strength)
+
+    def test_intraday_signal_uses_intraday_df(self):
+        # / signal with timeframe="2h" evaluates against intraday_df, not daily
+        cfg = _base_config(entry_conditions={
+            "operator": "AND",
+            "signals": [
+                {"indicator": "sma", "condition": "price_above", "period": 20, "timeframe": "2h"},
+            ],
+        })
+        s = ConfigDrivenStrategy(cfg)
+        daily = _ohlcv(150, base=100.0)
+        intraday = _ohlcv(150, base=80.0, trend=0.50)
+        result = s.should_enter("AAPL", daily, intraday_df=intraday)
+        assert result.should_enter is True
+        assert "[2h]" in result.reasons[0]
+
+    def test_intraday_signal_no_data_skipped(self):
+        # / signal with timeframe="2h" but no intraday_df -> skipped as failed
+        cfg = _base_config(entry_conditions={
+            "operator": "AND",
+            "signals": [
+                {"indicator": "rsi", "condition": "below", "threshold": 30, "timeframe": "2h"},
+            ],
+        })
+        s = ConfigDrivenStrategy(cfg)
+        data = _ohlcv(150)
+        result = s.should_enter("AAPL", data, intraday_df=None)
+        assert result.should_enter is False
+        assert "no 2h data" in result.reasons[0]
+
+    def test_intraday_signal_insufficient_bars_skipped(self):
+        # / intraday_df with <14 bars -> signal skipped
+        cfg = _base_config(entry_conditions={
+            "operator": "AND",
+            "signals": [
+                {"indicator": "rsi", "condition": "below", "threshold": 30, "timeframe": "2h"},
+            ],
+        })
+        s = ConfigDrivenStrategy(cfg)
+        daily = _ohlcv(150)
+        short_intraday = _ohlcv(10)
+        result = s.should_enter("AAPL", daily, intraday_df=short_intraday)
+        assert result.should_enter is False
+
+    def test_mixed_timeframe_and_operator(self):
+        # / AND with one daily signal and one 2h signal
+        cfg = _base_config(entry_conditions={
+            "operator": "AND",
+            "signals": [
+                {"indicator": "sma", "condition": "price_above", "period": 20},
+                {"indicator": "sma", "condition": "price_above", "period": 20, "timeframe": "2h"},
+            ],
+        })
+        s = ConfigDrivenStrategy(cfg)
+        rising = _ohlcv_rising(150)
+        result = s.should_enter("AAPL", rising, intraday_df=rising)
+        assert result.should_enter is True
+
+    def test_timeframe_case_insensitive_daily(self):
+        # / "1D", "Daily", "1day" all treated as daily
+        for tf in ["1d", "1D", "daily", "Daily", "1Day", "1DAY"]:
+            cfg = _base_config(entry_conditions={
+                "operator": "AND",
+                "signals": [{"indicator": "sma", "condition": "price_above", "period": 20, "timeframe": tf}],
+            })
+            s = ConfigDrivenStrategy(cfg)
+            data = _ohlcv_rising(150)
+            result = s.should_enter("AAPL", data)
+            # / daily timeframes should evaluate against daily data, not skip
+            assert "skipped" not in str(result.reasons), f"timeframe={tf} wrongly treated as intraday"
